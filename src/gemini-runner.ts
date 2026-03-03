@@ -14,7 +14,7 @@ export interface GeminiOptions {
 /** Injectable executor type — override in tests to avoid spawning a real subprocess. */
 export type GeminiExecutor = (
   args: string[],
-  opts: { env: NodeJS.ProcessEnv; cwd?: string; timeout: number; maxBuffer: number }
+  opts: { env: Record<string, string>; cwd?: string; timeout: number; maxBuffer: number }
 ) => Promise<{ stdout: string }>;
 
 const defaultExecutor: GeminiExecutor = (args, opts) =>
