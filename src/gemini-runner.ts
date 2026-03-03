@@ -26,7 +26,10 @@ const defaultExecutor: GeminiExecutor = (args, opts) =>
  * Security properties (mitigates CVE-2026-0755-class command injection):
  *  - execFile() passes args directly to execve() — no shell, no metacharacter risk
  *  - args array is built programmatically, never string-concatenated
- *  - env is restricted to HOME + PATH only
+ *  - env is restricted to HOME and PATH only; all other inherited env vars
+ *    (API keys, tokens, secrets) are stripped. Note: HOME is required for
+ *    Gemini CLI OAuth credential access (~/.config/gemini); it is not a
+ *    sandbox boundary.
  *  - --yolo auto-approves Gemini's own tool use (prevents hanging in non-interactive mode)
  *  - --output-format json gives structured, parseable output
  */

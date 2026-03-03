@@ -1,12 +1,12 @@
 /**
- * Tests for the MCP server dispatcher logic in index.ts.
+ * Tests for the MCP tool dispatcher (src/dispatcher.ts).
  *
- * We test the tool dispatch and error-wrapping behaviour directly by
- * simulating what the MCP SDK would send through CallToolRequestSchema,
- * without spinning up the full stdio transport.
+ * We import handleCallTool directly rather than spinning up the full
+ * StdioServerTransport, keeping tests fast and free of I/O side effects.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { ZodError } from "zod";
 
 vi.mock("../src/tools/ask-gemini.js", () => ({
   askGemini: vi.fn(),
@@ -32,35 +32,7 @@ vi.mock("../src/tools/gemini-reply.js", () => ({
 
 import { askGemini } from "../src/tools/ask-gemini.js";
 import { geminiReply } from "../src/tools/gemini-reply.js";
-
-// We import and call the dispatch logic directly rather than through the MCP
-// transport. Extract the handler logic into a testable helper.
-// The actual switch/dispatch is duplicated here to keep index.ts clean
-// (no coupling to test infrastructure).
-
-async function dispatch(
-  name: string,
-  args: Record<string, unknown>
-): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
-  try {
-    switch (name) {
-      case "ask-gemini": {
-        const result = await askGemini(args);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-      case "gemini-reply": {
-        const result = await geminiReply(args);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-      default:
-        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
-    }
-  } catch (err) {
-    if (err instanceof McpError) throw err;
-    const message = err instanceof Error ? err.message : String(err);
-    return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
-  }
-}
+import { handleCallTool } from "../src/dispatcher.js";
 
 const mockAskGemini = vi.mocked(askGemini);
 const mockGeminiReply = vi.mocked(geminiReply);
@@ -71,11 +43,11 @@ beforeEach(() => {
   mockGeminiReply.mockResolvedValue({ response: "follow up" });
 });
 
-describe("MCP dispatcher", () => {
+describe("MCP dispatcher (handleCallTool)", () => {
   // ── ask-gemini dispatch ────────────────────────────────────────────────────
 
   it("dispatches ask-gemini and returns JSON content", async () => {
-    const result = await dispatch("ask-gemini", { prompt: "hello" });
+    const result = await handleCallTool("ask-gemini", { prompt: "hello" });
     expect(result.content[0].type).toBe("text");
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.sessionId).toBe("abc-123");
@@ -83,14 +55,14 @@ describe("MCP dispatcher", () => {
   });
 
   it("passes args through to askGemini", async () => {
-    await dispatch("ask-gemini", { prompt: "test", model: "gemini-2.5-pro" });
+    await handleCallTool("ask-gemini", { prompt: "test", model: "gemini-2.5-pro" });
     expect(mockAskGemini).toHaveBeenCalledWith({ prompt: "test", model: "gemini-2.5-pro" });
   });
 
   // ── gemini-reply dispatch ──────────────────────────────────────────────────
 
   it("dispatches gemini-reply and returns JSON content", async () => {
-    const result = await dispatch("gemini-reply", {
+    const result = await handleCallTool("gemini-reply", {
       sessionId: "11111111-1111-4111-8111-111111111111",
       prompt: "follow up",
     });
@@ -101,18 +73,20 @@ describe("MCP dispatcher", () => {
   // ── Unknown tool ───────────────────────────────────────────────────────────
 
   it("throws McpError(MethodNotFound) for unknown tool name", async () => {
+    expect.assertions(1);
     try {
-      await dispatch("totally-unknown-tool", {});
+      await handleCallTool("totally-unknown-tool", {});
       expect.fail("should have thrown");
     } catch (err: unknown) {
-      const e = err as { code?: number };
-      expect(e.code).toBe(ErrorCode.MethodNotFound);
+      expect((err as McpError).code).toBe(ErrorCode.MethodNotFound);
     }
   });
 
   it("McpError includes the unknown tool name", async () => {
+    expect.assertions(1);
     try {
-      await dispatch("not-a-tool", {});
+      await handleCallTool("not-a-tool", {});
+      expect.fail("should have thrown");
     } catch (err: unknown) {
       expect((err as Error).message).toContain("not-a-tool");
     }
@@ -122,7 +96,7 @@ describe("MCP dispatcher", () => {
 
   it("wraps non-McpError as isError response (not a throw)", async () => {
     mockAskGemini.mockRejectedValue(new Error("subprocess crashed"));
-    const result = await dispatch("ask-gemini", { prompt: "hello" });
+    const result = await handleCallTool("ask-gemini", { prompt: "hello" });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("subprocess crashed");
   });
@@ -130,11 +104,43 @@ describe("MCP dispatcher", () => {
   it("re-throws McpError without wrapping it", async () => {
     const mcpErr = new McpError(ErrorCode.InvalidParams, "bad input");
     mockAskGemini.mockRejectedValue(mcpErr);
-    await expect(dispatch("ask-gemini", { prompt: "hello" })).rejects.toThrow(mcpErr);
+    await expect(handleCallTool("ask-gemini", { prompt: "hello" })).rejects.toThrow(mcpErr);
   });
 
   it("isError response is not set for successful calls", async () => {
-    const result = await dispatch("ask-gemini", { prompt: "hello" });
+    const result = await handleCallTool("ask-gemini", { prompt: "hello" });
     expect(result.isError).toBeUndefined();
+  });
+
+  // ── ZodError → McpError(InvalidParams) ────────────────────────────────────
+
+  it("converts ZodError to McpError(InvalidParams)", async () => {
+    const zodErr = new ZodError([
+      { path: ["prompt"], message: "Required", code: "invalid_type", expected: "string", received: "undefined" },
+    ]);
+    mockAskGemini.mockRejectedValue(zodErr);
+
+    expect.assertions(1);
+    try {
+      await handleCallTool("ask-gemini", {});
+      expect.fail("should have thrown");
+    } catch (err: unknown) {
+      expect((err as McpError).code).toBe(ErrorCode.InvalidParams);
+    }
+  });
+
+  it("ZodError McpError message includes field-level detail", async () => {
+    const zodErr = new ZodError([
+      { path: ["prompt"], message: "Required", code: "invalid_type", expected: "string", received: "undefined" },
+    ]);
+    mockAskGemini.mockRejectedValue(zodErr);
+
+    expect.assertions(1);
+    try {
+      await handleCallTool("ask-gemini", {});
+      expect.fail("should have thrown");
+    } catch (err: unknown) {
+      expect((err as Error).message).toContain("prompt");
+    }
   });
 });

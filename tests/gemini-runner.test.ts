@@ -52,9 +52,11 @@ describe("parseGeminiOutput", () => {
   });
 
   it("non-JSON error includes up to 2000 chars of raw output", () => {
+    expect.assertions(2);
     const longRaw = "X".repeat(3000);
     try {
       parseGeminiOutput(longRaw);
+      expect.fail("should have thrown");
     } catch (err) {
       expect((err as Error).message).toContain("X".repeat(2000));
       expect((err as Error).message).not.toContain("X".repeat(2001));
@@ -68,9 +70,11 @@ describe("parseGeminiOutput", () => {
   });
 
   it("unexpected shape error includes the parsed object for debugging", () => {
+    expect.assertions(1);
     const obj = { mystery: "clue" };
     try {
       parseGeminiOutput(JSON.stringify(obj));
+      expect.fail("should have thrown");
     } catch (err) {
       expect((err as Error).message).toContain('"mystery"');
     }
@@ -172,6 +176,22 @@ describe("runGemini", () => {
 
     const capturedOpts = vi.mocked(exec).mock.calls[0][1];
     expect(capturedOpts.cwd).toBeUndefined();
+  });
+
+  it("passes 60-second timeout to executor", async () => {
+    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    await runGemini("hello", {}, exec);
+
+    const capturedOpts = vi.mocked(exec).mock.calls[0][1];
+    expect(capturedOpts.timeout).toBe(60_000);
+  });
+
+  it("passes 10 MB maxBuffer to executor", async () => {
+    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    await runGemini("hello", {}, exec);
+
+    const capturedOpts = vi.mocked(exec).mock.calls[0][1];
+    expect(capturedOpts.maxBuffer).toBe(10 * 1024 * 1024);
   });
 
   // ── Error handling ─────────────────────────────────────────────────────────

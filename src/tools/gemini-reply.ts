@@ -8,10 +8,12 @@ export const GeminiReplySchema = z.object({
   prompt: z.string().min(1).describe("The follow-up message to send"),
   model: z
     .string()
+    .min(1)
     .optional()
     .describe("Gemini model to use. Overrides the model used in the original ask-gemini call."),
   cwd: z
     .string()
+    .min(1)
     .optional()
     .describe(
       "Working directory for the Gemini subprocess. Required when using relative @file paths."

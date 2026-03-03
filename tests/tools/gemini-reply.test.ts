@@ -48,19 +48,16 @@ describe("geminiReply", () => {
     );
   });
 
-  it("prepends conversation history when it exists", async () => {
-    const history = "[Conversation history]\nUser: hi\nGemini: hello\n[End of history — continue the conversation]";
+  it("prepends conversation history with \\n\\n separator", async () => {
+    const history =
+      "[Conversation history]\nUser: hi\nAssistant: hello\n[End of history — continue the conversation]";
     mockStore.formatHistory.mockReturnValue(history);
 
     await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "what did I say?" });
 
     const [calledPrompt] = vi.mocked(mockRunGemini).mock.calls[0];
-    expect(calledPrompt).toContain("[Conversation history]");
-    expect(calledPrompt).toContain("what did I say?");
-    // History comes first, then a separator, then the new prompt
-    expect(calledPrompt.indexOf("[Conversation history]")).toBeLessThan(
-      calledPrompt.indexOf("what did I say?")
-    );
+    // Exact separator matters: \n\n is the boundary Gemini uses to parse context vs new prompt
+    expect(calledPrompt).toBe(`${history}\n\nwhat did I say?`);
   });
 
   it("passes model option to runGemini when provided", async () => {
@@ -111,9 +108,11 @@ describe("geminiReply", () => {
   });
 
   it("McpError message includes the bad sessionId for debugging", async () => {
+    expect.assertions(1);
     mockStore.get.mockReturnValue(null);
     try {
       await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" });
+      expect.fail("should have thrown");
     } catch (err: unknown) {
       expect((err as Error).message).toContain(VALID_SESSION_ID);
     }

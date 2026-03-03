@@ -28,6 +28,25 @@ describe("SessionStore", () => {
     expect(ids.size).toBe(10);
   });
 
+  // ── createWithTurn() ──────────────────────────────────────────────────────
+
+  it("createWithTurn() returns a UUID and session is immediately populated", () => {
+    const id = store.createWithTurn("hi", "hello back");
+    expect(id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
+    const session = store.get(id)!;
+    expect(session.turns).toHaveLength(2);
+    expect(session.turns[0]).toEqual({ role: "user", content: "hi" });
+    expect(session.turns[1]).toEqual({ role: "assistant", content: "hello back" });
+  });
+
+  it("createWithTurn() session is never observable with 0 turns", () => {
+    // The session only becomes visible once turns are already stored
+    const id = store.createWithTurn("q", "a");
+    expect(store.get(id)!.turns.length).toBeGreaterThan(0);
+  });
+
   // ── get() ─────────────────────────────────────────────────────────────────
 
   it("get() returns session after create()", () => {
@@ -52,14 +71,14 @@ describe("SessionStore", () => {
 
   // ── appendTurn() ──────────────────────────────────────────────────────────
 
-  it("appendTurn() adds a user turn followed by a gemini turn", () => {
+  it("appendTurn() adds a user turn followed by an assistant turn", () => {
     const id = store.create();
     store.appendTurn(id, "hello", "hi there");
 
     const session = store.get(id)!;
     expect(session.turns).toHaveLength(2);
     expect(session.turns[0]).toEqual({ role: "user", content: "hello" });
-    expect(session.turns[1]).toEqual({ role: "gemini", content: "hi there" });
+    expect(session.turns[1]).toEqual({ role: "assistant", content: "hi there" });
   });
 
   it("appendTurn() accumulates turns across multiple calls", () => {
@@ -103,7 +122,7 @@ describe("SessionStore", () => {
     expect(history).toContain("[Conversation history]");
     expect(history).toContain("[End of history");
     expect(history).toContain("User: what is 2+2?");
-    expect(history).toContain("Gemini: 4");
+    expect(history).toContain("Assistant: 4");
   });
 
   it("formatHistory() includes all turns in order", () => {
@@ -116,9 +135,9 @@ describe("SessionStore", () => {
     // Header + 4 turn lines + footer
     expect(lines).toHaveLength(6);
     expect(lines[1]).toBe("User: q1");
-    expect(lines[2]).toBe("Gemini: a1");
+    expect(lines[2]).toBe("Assistant: a1");
     expect(lines[3]).toBe("User: q2");
-    expect(lines[4]).toBe("Gemini: a2");
+    expect(lines[4]).toBe("Assistant: a2");
   });
 
   // ── Multiple independent sessions ──────────────────────────────────────────

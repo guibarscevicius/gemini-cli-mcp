@@ -8,6 +8,7 @@ vi.mock("../../src/gemini-runner.js", () => ({
 vi.mock("../../src/session-store.js", () => ({
   sessionStore: {
     create: vi.fn(),
+    createWithTurn: vi.fn(),
     get: vi.fn(),
     appendTurn: vi.fn(),
     formatHistory: vi.fn(),
@@ -23,7 +24,7 @@ const mockStore = vi.mocked(sessionStore);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockStore.create.mockReturnValue("test-session-id");
+  mockStore.createWithTurn.mockReturnValue("test-session-id");
   mockRunGemini.mockResolvedValue("Gemini says hello.");
 });
 
@@ -60,18 +61,16 @@ describe("askGemini", () => {
     );
   });
 
-  it("creates a new session via sessionStore.create()", async () => {
+  it("creates a new session atomically via sessionStore.createWithTurn()", async () => {
     await askGemini({ prompt: "hello" });
-    expect(mockStore.create).toHaveBeenCalledOnce();
+    expect(mockStore.createWithTurn).toHaveBeenCalledOnce();
   });
 
-  it("stores the user prompt and gemini response in the session", async () => {
+  it("stores the user prompt and gemini response atomically in createWithTurn", async () => {
     await askGemini({ prompt: "my prompt" });
-    expect(mockStore.appendTurn).toHaveBeenCalledWith(
-      "test-session-id",
-      "my prompt",
-      "Gemini says hello."
-    );
+    expect(mockStore.createWithTurn).toHaveBeenCalledWith("my prompt", "Gemini says hello.");
+    // appendTurn is no longer called — createWithTurn replaces create()+appendTurn()
+    expect(mockStore.appendTurn).not.toHaveBeenCalled();
   });
 
   // ── Input validation (Zod) ─────────────────────────────────────────────────
@@ -101,9 +100,9 @@ describe("askGemini", () => {
     );
   });
 
-  it("does not call appendTurn if runGemini throws", async () => {
+  it("does not call createWithTurn if runGemini throws (no orphan session)", async () => {
     mockRunGemini.mockRejectedValue(new Error("failed"));
     await expect(askGemini({ prompt: "hello" })).rejects.toThrow();
-    expect(mockStore.appendTurn).not.toHaveBeenCalled();
+    expect(mockStore.createWithTurn).not.toHaveBeenCalled();
   });
 });
