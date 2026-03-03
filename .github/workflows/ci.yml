@@ -5,11 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # ready_for_review ensures CI runs when a draft PR is marked ready.
+    # synchronize/reopened only run jobs when draft == false (see job condition).
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   build:
-    name: Build & Lint (Node ${{ matrix.node-version }})
+    name: Build & Lint & Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    # Skip draft PRs. Also passes for direct pushes to main (no PR context).
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
 
     strategy:
       matrix:
@@ -32,3 +37,6 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Test
+        run: npm test

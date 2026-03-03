@@ -11,19 +11,32 @@ export interface GeminiOptions {
   cwd?: string;
 }
 
+/** Injectable executor type — override in tests to avoid spawning a real subprocess. */
+export type GeminiExecutor = (
+  args: string[],
+  opts: { env: Record<string, string>; cwd?: string; timeout: number; maxBuffer: number }
+) => Promise<{ stdout: string }>;
+
+const defaultExecutor: GeminiExecutor = (args, opts) =>
+  execFileAsync("gemini", args, opts) as Promise<{ stdout: string }>;
+
 /**
  * Runs `gemini` as a subprocess with no shell interpolation.
  *
  * Security properties (mitigates CVE-2026-0755-class command injection):
  *  - execFile() passes args directly to execve() — no shell, no metacharacter risk
  *  - args array is built programmatically, never string-concatenated
- *  - env is restricted to HOME + PATH only
+ *  - env is restricted to HOME and PATH only; all other inherited env vars
+ *    (API keys, tokens, secrets) are stripped. Note: HOME is required for
+ *    Gemini CLI OAuth credential access (~/.config/gemini); it is not a
+ *    sandbox boundary.
  *  - --yolo auto-approves Gemini's own tool use (prevents hanging in non-interactive mode)
  *  - --output-format json gives structured, parseable output
  */
 export async function runGemini(
   prompt: string,
-  opts: GeminiOptions = {}
+  opts: GeminiOptions = {},
+  executor: GeminiExecutor = defaultExecutor
 ): Promise<string> {
   const args: string[] = [
     "--yolo",
@@ -39,7 +52,7 @@ export async function runGemini(
 
   let stdout: string;
   try {
-    const result = await execFileAsync("gemini", args, {
+    const result = await executor(args, {
       // Restrict inherited environment to only what Gemini CLI needs for auth
       env: {
         HOME: process.env.HOME ?? "",
@@ -60,7 +73,7 @@ export async function runGemini(
   return parseGeminiOutput(stdout);
 }
 
-interface GeminiJsonOutput {
+export interface GeminiJsonOutput {
   // The Gemini CLI --output-format json shape (verified empirically).
   // Field names may differ across CLI versions — the fallback chain handles this.
   response?: string;
@@ -70,7 +83,11 @@ interface GeminiJsonOutput {
   // Unused stats fields omitted
 }
 
-function parseGeminiOutput(raw: string): string {
+/**
+ * Exported for unit testing. Parse the raw JSON stdout from `gemini --output-format json`.
+ * Throws descriptive errors for all failure modes so callers can diagnose issues.
+ */
+export function parseGeminiOutput(raw: string): string {
   let parsed: GeminiJsonOutput;
   try {
     parsed = JSON.parse(raw) as GeminiJsonOutput;
