@@ -1,0 +1,51 @@
+{
+  "name": "gemini-cli-mcp",
+  "version": "0.1.0",
+  "description": "Safe MCP server wrapping the official Gemini CLI — stateful sessions, no shell injection, subscription auth",
+  "type": "module",
+  "bin": {
+    "gemini-cli-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "gemini",
+    "mcp",
+    "claude",
+    "llm",
+    "model-context-protocol",
+    "gemini-cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guibarscevicius/gemini-cli-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/guibarscevicius/gemini-cli-mcp/issues"
+  },
+  "homepage": "https://github.com/guibarscevicius/gemini-cli-mcp#readme"
+}
