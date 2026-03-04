@@ -91,22 +91,27 @@ Sessions auto-expire after 60 minutes of inactivity.
 
 ## Using `@file` syntax
 
-The Gemini CLI supports `@file` to inject file contents directly into the prompt. Two patterns:
+The Gemini CLI supports `@file` to inject file contents directly into the prompt.
 
-**Absolute path (no `cwd` needed):**
-```
-ask-gemini({
-  prompt: "Review this file: @/home/gui/projects/myapp/src/auth.ts"
-})
-```
+> **Always pass `cwd`** — the Gemini CLI enforces a workspace boundary at the subprocess's working directory. Any `@file` path (relative or absolute) that resolves outside the `cwd` tree is rejected with `Path not in workspace`. Pass `cwd` equal to the root of the project containing your target files.
 
-**Relative path (requires `cwd`):**
+**Recommended pattern (works for both absolute and relative paths):**
 ```
 ask-gemini({
   prompt: "Review this file: @src/auth.ts",
   cwd: "/home/gui/projects/myapp"
 })
 ```
+
+**Absolute path also works, as long as `cwd` covers it:**
+```
+ask-gemini({
+  prompt: "Review this file: @/home/gui/projects/myapp/src/auth.ts",
+  cwd: "/home/gui/projects/myapp"
+})
+```
+
+> **One `@file` per prompt** — using two or more `@file` tokens in a single prompt causes the Gemini CLI subprocess to exit silently with a non-descriptive error. Read files in separate calls if you need multiple.
 
 ## Multi-turn example
 
