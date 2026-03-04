@@ -16,7 +16,7 @@ export const GeminiReplySchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Working directory for the Gemini subprocess. Required when using relative @file paths."
+      "Working directory for the Gemini subprocess. Required for any @file path — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected."
     ),
 });
 
@@ -83,7 +83,7 @@ export const geminiReplyToolDefinition = {
       cwd: {
         type: "string",
         description:
-          "Working directory for the subprocess. Required when using relative @file paths (e.g. @src/auth.ts).",
+          "Working directory for the subprocess. Required for any @file path (relative or absolute) — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected.",
       },
     },
     required: ["sessionId", "prompt"],
