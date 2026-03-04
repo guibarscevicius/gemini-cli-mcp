@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import * as os from "node:os";
 import {
   runGemini,
   parseGeminiOutput,
+  expandFileRefs,
   type GeminiExecutor,
 } from "../src/gemini-runner.js";
 
@@ -370,5 +374,115 @@ describe("runGemini", () => {
     await expect(runGemini("hello", {}, exec)).rejects.toThrow(
       "gemini error: quota exceeded"
     );
+  });
+
+  it("throws when 2+ @file tokens are present and cwd is not provided", async () => {
+    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    await expect(
+      runGemini("Read @src/a.ts and @src/b.ts", {}, exec)
+    ).rejects.toThrow("Multiple @file tokens require the cwd option");
+    expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+// ── expandFileRefs ──────────────────────────────────────────────────────────
+
+describe("expandFileRefs", () => {
+  /** Create a temporary directory with given files and return its path. */
+  async function makeTmpDir(files: Record<string, string>): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gemini-test-"));
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = path.join(dir, rel);
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, content, "utf-8");
+    }
+    return dir;
+  }
+
+  it("returns prompt unchanged for a single @file token", async () => {
+    const dir = await makeTmpDir({ "a.ts": "export const a = 1;" });
+    const prompt = "Review @a.ts please";
+    const result = await expandFileRefs(prompt, dir);
+    expect(result).toBe(prompt);
+    await fs.rm(dir, { recursive: true });
+  });
+
+  it("expands two @file tokens: keeps @tokens in text and appends REFERENCE block", async () => {
+    const dir = await makeTmpDir({
+      "a.ts": "const a = 1;",
+      "b.ts": "const b = 2;",
+    });
+    const prompt = "Compare @a.ts and @b.ts";
+    const result = await expandFileRefs(prompt, dir);
+
+    // Original prompt text is unchanged
+    expect(result).toContain("Compare @a.ts and @b.ts");
+    // REFERENCE block is appended
+    expect(result).toContain("[REFERENCE_CONTENT_START]");
+    expect(result).toContain("[REFERENCE_CONTENT_END]");
+    expect(result).toContain("Content from @a.ts:");
+    expect(result).toContain("const a = 1;");
+    expect(result).toContain("Content from @b.ts:");
+    expect(result).toContain("const b = 2;");
+
+    await fs.rm(dir, { recursive: true });
+  });
+
+  it("expands three @file tokens correctly", async () => {
+    const dir = await makeTmpDir({
+      "a.ts": "// a",
+      "b.ts": "// b",
+      "c.ts": "// c",
+    });
+    const prompt = "Look at @a.ts, @b.ts, and @c.ts";
+    const result = await expandFileRefs(prompt, dir);
+
+    expect(result).toContain("Content from @a.ts:");
+    expect(result).toContain("Content from @b.ts:");
+    expect(result).toContain("Content from @c.ts:");
+
+    await fs.rm(dir, { recursive: true });
+  });
+
+  it("expands a glob pattern (@src/**/*.ts) — all matched files inlined", async () => {
+    const dir = await makeTmpDir({
+      "src/x.ts": "const x = 1;",
+      "src/y.ts": "const y = 2;",
+      "b.ts": "const b = 0;",
+    });
+    // One glob token + one plain token = 2 file refs → expansion triggered
+    const prompt = "Review @src/*.ts and @b.ts";
+    const result = await expandFileRefs(prompt, dir);
+
+    expect(result).toContain("[REFERENCE_CONTENT_START]");
+    expect(result).toContain("const x = 1;");
+    expect(result).toContain("const y = 2;");
+    expect(result).toContain("const b = 0;");
+
+    await fs.rm(dir, { recursive: true });
+  });
+
+  it("throws 'File not found' for a non-existent @file path", async () => {
+    const dir = await makeTmpDir({ "a.ts": "const a = 1;" });
+    await expect(expandFileRefs("Compare @a.ts and @missing.ts", dir)).rejects.toThrow(
+      "File not found: @missing.ts"
+    );
+    await fs.rm(dir, { recursive: true });
+  });
+
+  it("throws 'File not found' when a glob pattern matches nothing", async () => {
+    const dir = await makeTmpDir({ "a.ts": "const a = 1;" });
+    await expect(expandFileRefs("Look at @a.ts and @src/**/*.ts", dir)).rejects.toThrow(
+      "File not found: @src/**/*.ts"
+    );
+    await fs.rm(dir, { recursive: true });
+  });
+
+  it("throws 'Path not in workspace' for a file outside cwd", async () => {
+    const dir = await makeTmpDir({ "a.ts": "const a = 1;" });
+    await expect(
+      expandFileRefs("Look at @a.ts and @/etc/passwd", dir)
+    ).rejects.toThrow("Path not in workspace");
+    await fs.rm(dir, { recursive: true });
   });
 });

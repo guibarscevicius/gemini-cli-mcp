@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import * as nodePath from "node:path";
 import { promisify } from "node:util";
+import { glob } from "glob";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,6 +22,70 @@ export type GeminiExecutor = (
 
 const defaultExecutor: GeminiExecutor = (args, opts) =>
   execFileAsync("gemini", args, opts) as Promise<{ stdout: string }>;
+
+/**
+ * Regex that matches @file tokens (@ at start of token, path contains `/` or `.`).
+ * Deliberately excludes email addresses, bare @mentions, and trailing sentence
+ * punctuation (,;:!?)] that would not be part of a file path).
+ */
+const FILE_REF_RE = /(^|(?<=\s))@([^\s@,;:!?)\]]*[/.][^\s@,;:!?)\]]*)/g;
+
+/** Count the number of @file tokens in a prompt. */
+function countFileRefs(prompt: string): number {
+  return [...prompt.matchAll(FILE_REF_RE)].length;
+}
+
+/**
+ * Expand 2+ @file tokens in a prompt by reading the files and appending a
+ * REFERENCE block. Single @file tokens are left untouched so the CLI handles
+ * them natively (workspace boundary enforcement, etc.).
+ *
+ * Throws if any referenced file is not found or falls outside `cwd`.
+ */
+export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
+  const matches = [...prompt.matchAll(FILE_REF_RE)];
+  if (matches.length < 2) return prompt;
+
+  const cwdResolved = nodePath.resolve(cwd);
+  const sections: string[] = [];
+
+  for (const match of matches) {
+    const rawPath = match[2]; // capture group 2 is the path after @
+
+    let filePaths: string[];
+    if (/[*?{]/.test(rawPath)) {
+      // Glob pattern — expand relative to cwd
+      filePaths = await glob(rawPath, { cwd: cwdResolved, absolute: true });
+      if (filePaths.length === 0) {
+        throw new Error(`File not found: @${rawPath} — no files matched in ${cwdResolved}`);
+      }
+    } else {
+      filePaths = [nodePath.resolve(cwdResolved, rawPath)];
+    }
+
+    for (const absPath of filePaths) {
+      // Workspace boundary check
+      if (!absPath.startsWith(cwdResolved + nodePath.sep) && absPath !== cwdResolved) {
+        throw new Error(
+          `Path not in workspace: @${rawPath} resolves to ${absPath} which is outside ${cwdResolved}`
+        );
+      }
+
+      let content: string;
+      try {
+        content = await readFile(absPath, "utf-8");
+      } catch {
+        throw new Error(`File not found: @${rawPath} — ${absPath} does not exist`);
+      }
+
+      const relPath = nodePath.relative(cwdResolved, absPath);
+      sections.push(`Content from @${relPath}:\n${content}`);
+    }
+  }
+
+  const referenceBlock = `\n\n[REFERENCE_CONTENT_START]\n${sections.join("\n\n")}\n[REFERENCE_CONTENT_END]`;
+  return prompt + referenceBlock;
+}
 
 /**
  * Runs `gemini` as a subprocess with no shell interpolation.
@@ -46,12 +113,24 @@ export async function runGemini(
     );
   }
 
+  // Guard: multiple @file tokens need cwd to resolve paths
+  if (!opts.cwd && countFileRefs(prompt) >= 2) {
+    throw new Error(
+      "Multiple @file tokens require the cwd option — pass the project root directory."
+    );
+  }
+
+  // Expand multiple @file references ourselves; single @file still goes through CLI
+  const expandedPrompt = opts.cwd
+    ? await expandFileRefs(prompt, opts.cwd)
+    : prompt;
+
   const args: string[] = [
     "--yolo",
     "--output-format",
     "json",
     "--prompt",
-    prompt,
+    expandedPrompt,
   ];
 
   if (opts.model) {
