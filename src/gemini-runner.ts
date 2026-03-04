@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import * as nodePath from "node:path";
 import { promisify } from "node:util";
 import { glob } from "glob";
@@ -24,9 +24,12 @@ const defaultExecutor: GeminiExecutor = (args, opts) =>
   execFileAsync("gemini", args, opts) as Promise<{ stdout: string }>;
 
 /**
- * Regex that matches @file tokens (@ at start of token, path contains `/` or `.`).
- * Deliberately excludes email addresses, bare @mentions, and trailing sentence
- * punctuation (,;:!?)] that would not be part of a file path).
+ * Matches @file tokens where @ is preceded by whitespace or start of string.
+ * Requires the path portion to contain at least one `/` or `.` character —
+ * this excludes bare @mentions and most email addresses.
+ * Trailing sentence punctuation (,;:!?)] is excluded from the path capture.
+ *
+ * Capture groups: [1] = leading whitespace or "" (ignored), [2] = path after @.
  */
 const FILE_REF_RE = /(^|(?<=\s))@([^\s@,;:!?)\]]*[/.][^\s@,;:!?)\]]*)/g;
 
@@ -40,13 +43,26 @@ function countFileRefs(prompt: string): number {
  * REFERENCE block. Single @file tokens are left untouched so the CLI handles
  * them natively (workspace boundary enforcement, etc.).
  *
- * Throws if any referenced file is not found or falls outside `cwd`.
+ * The original @token text is preserved in the prompt; file contents are
+ * appended in a `[REFERENCE_CONTENT_START] ... [REFERENCE_CONTENT_END]` block
+ * and are NOT inlined at the token position.
+ *
+ * Throws if any referenced file is not found, is a directory, or resolves
+ * (following symlinks) to a path outside `cwd`.
  */
 export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
   const matches = [...prompt.matchAll(FILE_REF_RE)];
   if (matches.length < 2) return prompt;
 
   const cwdResolved = nodePath.resolve(cwd);
+  // realpath() validates cwd exists and resolves symlinks for boundary checks
+  let realCwd: string;
+  try {
+    realCwd = await realpath(cwdResolved);
+  } catch {
+    throw new Error(`cwd does not exist or is not accessible: ${cwdResolved}`);
+  }
+
   const sections: string[] = [];
 
   for (const match of matches) {
@@ -54,35 +70,59 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
 
     let filePaths: string[];
     if (/[*?{]/.test(rawPath)) {
-      // Glob pattern — expand relative to cwd
-      filePaths = await glob(rawPath, { cwd: cwdResolved, absolute: true });
+      // Glob pattern — expand relative to cwd; exclude directories
+      try {
+        filePaths = await glob(rawPath, { cwd: realCwd, absolute: true, nodir: true });
+      } catch (err) {
+        throw new Error(
+          `Failed to expand glob pattern @${rawPath} in ${realCwd}: ${(err as Error).message}`,
+          { cause: err }
+        );
+      }
       if (filePaths.length === 0) {
-        throw new Error(`File not found: @${rawPath} — no files matched in ${cwdResolved}`);
+        throw new Error(`File not found: @${rawPath} — no files matched in ${realCwd}`);
       }
     } else {
-      filePaths = [nodePath.resolve(cwdResolved, rawPath)];
+      filePaths = [nodePath.resolve(realCwd, rawPath)];
     }
 
     for (const absPath of filePaths) {
-      // Workspace boundary check
-      if (!absPath.startsWith(cwdResolved + nodePath.sep) && absPath !== cwdResolved) {
+      // Resolve symlinks before the workspace boundary check to prevent symlink escape
+      let realAbsPath: string;
+      try {
+        realAbsPath = await realpath(absPath);
+      } catch {
+        throw new Error(`File not found: @${rawPath} — ${absPath} does not exist`);
+      }
+
+      // Workspace boundary check using symlink-resolved paths
+      if (!realAbsPath.startsWith(realCwd + nodePath.sep) && realAbsPath !== realCwd) {
         throw new Error(
-          `Path not in workspace: @${rawPath} resolves to ${absPath} which is outside ${cwdResolved}`
+          `Path not in workspace: @${rawPath} resolves to ${realAbsPath} which is outside ${realCwd}`
         );
       }
 
       let content: string;
       try {
-        content = await readFile(absPath, "utf-8");
-      } catch {
-        throw new Error(`File not found: @${rawPath} — ${absPath} does not exist`);
+        content = await readFile(realAbsPath, "utf-8");
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        const detail =
+          code === "EISDIR"
+            ? "is a directory — use a glob pattern like @src/**/*.ts"
+            : code === "EACCES"
+              ? "permission denied"
+              : `read failed (${code ?? "unknown"})`;
+        throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
       }
 
-      const relPath = nodePath.relative(cwdResolved, absPath);
+      const relPath = nodePath.relative(realCwd, realAbsPath);
       sections.push(`Content from @${relPath}:\n${content}`);
     }
   }
 
+  // Sentinel delimiters give the model a clear boundary for injected content.
+  // The "Content from @<relPath>:" header preserves the original @token reference.
   const referenceBlock = `\n\n[REFERENCE_CONTENT_START]\n${sections.join("\n\n")}\n[REFERENCE_CONTENT_END]`;
   return prompt + referenceBlock;
 }
@@ -145,7 +185,10 @@ export async function runGemini(
         HOME: homeDir,
         PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
       },
-      cwd: opts.cwd, // undefined = MCP server CWD; set to enable relative @file paths
+      // Sets subprocess working directory. For single @file prompts the CLI resolves
+      // the path relative to this; for 2+ @file prompts expandFileRefs() has already
+      // inlined the content above, so the CLI no longer needs to resolve @file itself.
+      cwd: opts.cwd,
       timeout: TIMEOUT_MS,
       maxBuffer: 10 * 1024 * 1024, // 10 MB — generous for large responses
     });
