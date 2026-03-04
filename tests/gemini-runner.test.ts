@@ -533,6 +533,48 @@ describe("expandFileRefs", () => {
       expandFileRefs("Compare @a.ts and @b.ts", "/nonexistent/path/that/does/not/exist")
     ).rejects.toThrow("does not exist or is not accessible");
   });
+
+  it("throws 'Path not in workspace' for a relative path escaping cwd via ../", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "gemini-parent-"));
+    const dir = path.join(parent, "workspace");
+    await fs.mkdir(dir);
+    await fs.writeFile(path.join(dir, "a.ts"), "const a = 1;");
+    await fs.writeFile(path.join(parent, "escape.ts"), "secret");
+    try {
+      await expect(
+        expandFileRefs("Look at @a.ts and @../escape.ts", dir)
+      ).rejects.toThrow("Path not in workspace");
+    } finally {
+      await fs.rm(parent, { recursive: true });
+    }
+  });
+
+  it("throws 'Path not in workspace' for a symlink inside cwd that points outside", async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "gemini-outside-"));
+    const dir = await makeTmpDir({ "a.ts": "const a = 1;" });
+    await fs.writeFile(path.join(outsideDir, "secret.ts"), "secret");
+    await fs.symlink(path.join(outsideDir, "secret.ts"), path.join(dir, "escape.ts"));
+    try {
+      await expect(
+        expandFileRefs("Compare @a.ts and @escape.ts", dir)
+      ).rejects.toThrow("Path not in workspace");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+      await fs.rm(outsideDir, { recursive: true });
+    }
+  });
+
+  it("throws 'is a directory' when an @file path resolves to a directory inside cwd", async () => {
+    const dir = await makeTmpDir({ "a.ts": "const a = 1;" });
+    await fs.mkdir(path.join(dir, "sub.dir")); // dot required for regex match
+    try {
+      await expect(
+        expandFileRefs("Compare @a.ts and @sub.dir", dir)
+      ).rejects.toThrow("is a directory");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
 });
 
 // ── runGemini @file integration ─────────────────────────────────────────────
@@ -559,6 +601,22 @@ describe("runGemini — @file integration", () => {
       // Single @file — no REFERENCE block injected
       expect(promptArg).toBe("Review @a.ts");
       expect(promptArg).not.toContain("[REFERENCE_CONTENT_START]");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
+  it("passes expanded REFERENCE block to executor when cwd is set and 2+ @file tokens present", async () => {
+    const dir = await makeTmpDir({ "a.ts": "const a = 1;", "b.ts": "const b = 2;" });
+    try {
+      const exec = vi.fn().mockResolvedValue({ stdout: JSON.stringify({ response: "ok" }) });
+      await runGemini("Compare @a.ts and @b.ts", { cwd: dir }, exec);
+
+      const args = vi.mocked(exec).mock.calls[0][0];
+      const promptArg = args[args.indexOf("--prompt") + 1];
+      expect(promptArg).toContain("[REFERENCE_CONTENT_START]");
+      expect(promptArg).toContain("const a = 1;");
+      expect(promptArg).toContain("const b = 2;");
     } finally {
       await fs.rm(dir, { recursive: true });
     }

@@ -29,9 +29,9 @@ const defaultExecutor: GeminiExecutor = (args, opts) =>
  * this excludes bare @mentions and most email addresses.
  * Trailing sentence punctuation (,;:!?)] is excluded from the path capture.
  *
- * Capture groups: [1] = leading whitespace or "" (ignored), [2] = path after @.
+ * Capture group: [1] = path after @.
  */
-const FILE_REF_RE = /(^|(?<=\s))@([^\s@,;:!?)\]]*[/.][^\s@,;:!?)\]]*)/g;
+const FILE_REF_RE = /(?:^|(?<=\s))@([^\s@,;:!?)\]]*[/.][^\s@,;:!?)\]]*)/g;
 
 /** Count the number of @file tokens in a prompt. */
 function countFileRefs(prompt: string): number {
@@ -55,22 +55,20 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
   if (matches.length < 2) return prompt;
 
   const cwdResolved = nodePath.resolve(cwd);
-  // realpath() validates cwd exists and resolves symlinks for boundary checks
   let realCwd: string;
   try {
     realCwd = await realpath(cwdResolved);
-  } catch {
-    throw new Error(`cwd does not exist or is not accessible: ${cwdResolved}`);
+  } catch (err) {
+    throw new Error(`cwd does not exist or is not accessible: ${cwdResolved}`, { cause: err });
   }
 
   const sections: string[] = [];
 
   for (const match of matches) {
-    const rawPath = match[2]; // capture group 2 is the path after @
+    const rawPath = match[1]; // capture group 1 is the path after @
 
     let filePaths: string[];
     if (/[*?{]/.test(rawPath)) {
-      // Glob pattern — expand relative to cwd; exclude directories
       try {
         filePaths = await glob(rawPath, { cwd: realCwd, absolute: true, nodir: true });
       } catch (err) {
@@ -87,32 +85,32 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
     }
 
     for (const absPath of filePaths) {
-      // Resolve symlinks before the workspace boundary check to prevent symlink escape
+      // realpath() follows symlinks — prevents a symlink inside cwd from escaping the workspace
       let realAbsPath: string;
       try {
         realAbsPath = await realpath(absPath);
-      } catch {
-        throw new Error(`File not found: @${rawPath} — ${absPath} does not exist`);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        const detail = code === "EACCES" ? "permission denied" : "does not exist";
+        throw new Error(`File not found: @${rawPath} — ${absPath} ${detail}`, { cause: err });
       }
 
-      // Workspace boundary check using symlink-resolved paths
       if (!realAbsPath.startsWith(realCwd + nodePath.sep) && realAbsPath !== realCwd) {
         throw new Error(
           `Path not in workspace: @${rawPath} resolves to ${realAbsPath} which is outside ${realCwd}`
         );
       }
 
+      const readErrorDetails: Record<string, string> = {
+        EISDIR: "is a directory — use a glob pattern like @src/**/*.ts",
+        EACCES: "permission denied",
+      };
       let content: string;
       try {
         content = await readFile(realAbsPath, "utf-8");
       } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        const detail =
-          code === "EISDIR"
-            ? "is a directory — use a glob pattern like @src/**/*.ts"
-            : code === "EACCES"
-              ? "permission denied"
-              : `read failed (${code ?? "unknown"})`;
+        const code = (err as NodeJS.ErrnoException).code ?? "unknown";
+        const detail = readErrorDetails[code] ?? `read failed (${code})`;
         throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
       }
 
