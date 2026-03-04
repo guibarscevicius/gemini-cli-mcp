@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { ZodError } from "zod";
 
 // Module mocks must be declared before imports
 vi.mock("../../src/gemini-runner.js", () => ({
@@ -76,19 +77,22 @@ describe("askGemini", () => {
   // ── Input validation (Zod) ─────────────────────────────────────────────────
 
   it("throws ZodError when prompt is missing", async () => {
-    await expect(askGemini({})).rejects.toThrow();
+    await expect(askGemini({})).rejects.toThrow(ZodError);
   });
 
   it("throws ZodError when prompt is an empty string", async () => {
-    await expect(askGemini({ prompt: "" })).rejects.toThrow();
+    await expect(askGemini({ prompt: "" })).rejects.toThrow(ZodError);
   });
 
   it("throws ZodError when prompt is not a string", async () => {
-    await expect(askGemini({ prompt: 42 })).rejects.toThrow();
+    await expect(askGemini({ prompt: 42 })).rejects.toThrow(ZodError);
   });
 
   it("accepts input without optional fields (model, cwd)", async () => {
-    await expect(askGemini({ prompt: "hello" })).resolves.toBeDefined();
+    await expect(askGemini({ prompt: "hello" })).resolves.toMatchObject({
+      sessionId: expect.any(String),
+      response: expect.any(String),
+    });
   });
 
   // ── Error propagation ──────────────────────────────────────────────────────
@@ -102,7 +106,7 @@ describe("askGemini", () => {
 
   it("does not call createWithTurn if runGemini throws (no orphan session)", async () => {
     mockRunGemini.mockRejectedValue(new Error("failed"));
-    await expect(askGemini({ prompt: "hello" })).rejects.toThrow();
+    await expect(askGemini({ prompt: "hello" })).rejects.toThrow("failed");
     expect(mockStore.createWithTurn).not.toHaveBeenCalled();
   });
 });

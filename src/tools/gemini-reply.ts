@@ -26,6 +26,10 @@ export interface GeminiReplyOutput {
   response: string;
 }
 
+/**
+ * Continue an existing Gemini session.
+ * Throws McpError(InvalidParams) when the provided sessionId is unknown or expired.
+ */
 export async function geminiReply(input: unknown): Promise<GeminiReplyOutput> {
   const { sessionId, prompt, model, cwd } = GeminiReplySchema.parse(input);
 
@@ -42,8 +46,16 @@ export async function geminiReply(input: unknown): Promise<GeminiReplyOutput> {
   const fullPrompt = history ? `${history}\n\n${prompt}` : prompt;
 
   const response = await runGemini(fullPrompt, { model, cwd });
-
-  sessionStore.appendTurn(sessionId, prompt, response);
+  try {
+    sessionStore.appendTurn(sessionId, prompt, response);
+  } catch (err) {
+    process.stderr.write(
+      `[gemini-cli-mcp] Session ${sessionId} evicted during runGemini; ` +
+        `response computed but history not persisted: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`
+    );
+  }
 
   return { response };
 }

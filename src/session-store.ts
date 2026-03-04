@@ -6,8 +6,13 @@ export interface Turn {
 }
 
 interface Session {
-  turns: Turn[];
+  readonly turns: ReadonlyArray<Readonly<Turn>>;
   /** Unix timestamp (ms) of the last read or write — used for TTL eviction. */
+  readonly lastAccessed: number;
+}
+
+interface MutableSession {
+  turns: Turn[];
   lastAccessed: number;
 }
 
@@ -29,7 +34,7 @@ const GC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
  * portable.
  */
 export class SessionStore {
-  private readonly sessions = new Map<string, Session>();
+  private readonly sessions = new Map<string, MutableSession>();
   private readonly gcTimer: ReturnType<typeof setInterval>;
 
   constructor(ttlMs = SESSION_TTL_MS, gcIntervalMs = GC_INTERVAL_MS) {
@@ -37,7 +42,7 @@ export class SessionStore {
   }
 
   /** Create a new empty session and return its ID. */
-  create(): string {
+  private create(): string {
     const id = randomUUID();
     this.sessions.set(id, { turns: [], lastAccessed: Date.now() });
     return id;
@@ -61,11 +66,14 @@ export class SessionStore {
   }
 
   /** Retrieve a session, updating lastAccessed. Returns null if not found / expired. */
-  get(id: string): Readonly<Session> | null {
+  get(id: string): Session | null {
     const session = this.sessions.get(id);
     if (!session) return null;
     session.lastAccessed = Date.now();
-    return session;
+    return {
+      turns: session.turns.map((turn) => ({ ...turn })),
+      lastAccessed: session.lastAccessed,
+    };
   }
 
   /** Append a user+assistant turn pair to an existing session */
@@ -81,7 +89,9 @@ export class SessionStore {
 
   /**
    * Format prior turns as a structured context block to prepend to a new prompt.
-   * Returns empty string if there are no prior turns (first message in session).
+   * Returns empty string if the session is missing or has no prior turns.
+   * Callers should invoke get() first to verify the session exists and refresh TTL;
+   * formatHistory() itself is a read-only formatter and does not update lastAccessed.
    */
   formatHistory(id: string): string {
     const session = this.sessions.get(id);
@@ -99,10 +109,15 @@ export class SessionStore {
   /** Remove sessions that have exceeded the TTL */
   private gc(ttlMs: number): void {
     const cutoff = Date.now() - ttlMs;
+    let evicted = 0;
     for (const [id, session] of this.sessions) {
       if (session.lastAccessed < cutoff) {
         this.sessions.delete(id);
+        evicted++;
       }
+    }
+    if (evicted > 0) {
+      process.stderr.write(`[gemini-cli-mcp] GC: evicted ${evicted} expired session(s)\n`);
     }
   }
 

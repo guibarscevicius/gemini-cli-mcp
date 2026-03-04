@@ -25,6 +25,7 @@ export interface AskGeminiOutput {
   response: string;
 }
 
+/** Start a new Gemini session and persist the first user/assistant turn atomically. */
 export async function askGemini(input: unknown): Promise<AskGeminiOutput> {
   const { prompt, model, cwd } = AskGeminiSchema.parse(input);
 

@@ -14,20 +14,6 @@ describe("SessionStore", () => {
     vi.useRealTimers();
   });
 
-  // ── create() ──────────────────────────────────────────────────────────────
-
-  it("create() returns a UUID-shaped string", () => {
-    const id = store.create();
-    expect(id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-    );
-  });
-
-  it("create() returns a unique ID each call", () => {
-    const ids = new Set(Array.from({ length: 10 }, () => store.create()));
-    expect(ids.size).toBe(10);
-  });
-
   // ── createWithTurn() ──────────────────────────────────────────────────────
 
   it("createWithTurn() returns a UUID and session is immediately populated", () => {
@@ -41,6 +27,15 @@ describe("SessionStore", () => {
     expect(session.turns[1]).toEqual({ role: "assistant", content: "hello back" });
   });
 
+  it("createWithTurn() returns a unique ID each call", () => {
+    const ids = new Set(
+      Array.from({ length: 10 }, (_, index) =>
+        store.createWithTurn(`question ${index}`, `answer ${index}`)
+      )
+    );
+    expect(ids.size).toBe(10);
+  });
+
   it("createWithTurn() session is never observable with 0 turns", () => {
     // The session only becomes visible once turns are already stored
     const id = store.createWithTurn("q", "a");
@@ -49,8 +44,8 @@ describe("SessionStore", () => {
 
   // ── get() ─────────────────────────────────────────────────────────────────
 
-  it("get() returns session after create()", () => {
-    const id = store.create();
+  it("get() returns session after createWithTurn()", () => {
+    const id = store.createWithTurn("hi", "hello");
     expect(store.get(id)).not.toBeNull();
   });
 
@@ -59,7 +54,7 @@ describe("SessionStore", () => {
   });
 
   it("get() updates lastAccessed on each call", () => {
-    const id = store.create();
+    const id = store.createWithTurn("hello", "hi");
     const session1 = store.get(id)!;
     const t1 = session1.lastAccessed;
 
@@ -69,24 +64,39 @@ describe("SessionStore", () => {
     expect(session2.lastAccessed).toBeGreaterThan(t1);
   });
 
+  it("get() returns a defensive copy of the session data", () => {
+    const id = store.createWithTurn("hello", "hi there");
+    const snapshot = store.get(id)! as {
+      turns: Array<{ role: "user" | "assistant"; content: string }>;
+      lastAccessed: number;
+    };
+
+    snapshot.turns[0].content = "mutated";
+    snapshot.turns.push({ role: "user", content: "extra" });
+
+    const current = store.get(id)!;
+    expect(current.turns).toHaveLength(2);
+    expect(current.turns[0]).toEqual({ role: "user", content: "hello" });
+  });
+
   // ── appendTurn() ──────────────────────────────────────────────────────────
 
   it("appendTurn() adds a user turn followed by an assistant turn", () => {
-    const id = store.create();
+    const id = store.createWithTurn("initial user", "initial assistant");
     store.appendTurn(id, "hello", "hi there");
 
     const session = store.get(id)!;
-    expect(session.turns).toHaveLength(2);
-    expect(session.turns[0]).toEqual({ role: "user", content: "hello" });
-    expect(session.turns[1]).toEqual({ role: "assistant", content: "hi there" });
+    expect(session.turns).toHaveLength(4);
+    expect(session.turns[2]).toEqual({ role: "user", content: "hello" });
+    expect(session.turns[3]).toEqual({ role: "assistant", content: "hi there" });
   });
 
   it("appendTurn() accumulates turns across multiple calls", () => {
-    const id = store.create();
+    const id = store.createWithTurn("start", "reply");
     store.appendTurn(id, "turn 1 user", "turn 1 gemini");
     store.appendTurn(id, "turn 2 user", "turn 2 gemini");
 
-    expect(store.get(id)!.turns).toHaveLength(4);
+    expect(store.get(id)!.turns).toHaveLength(6);
   });
 
   it("appendTurn() throws for unknown session ID", () => {
@@ -96,7 +106,7 @@ describe("SessionStore", () => {
   });
 
   it("appendTurn() updates lastAccessed", () => {
-    const id = store.create();
+    const id = store.createWithTurn("hello", "hi");
     const before = store.get(id)!.lastAccessed;
     vi.advanceTimersByTime(500);
     store.appendTurn(id, "u", "g");
@@ -105,18 +115,12 @@ describe("SessionStore", () => {
 
   // ── formatHistory() ───────────────────────────────────────────────────────
 
-  it("formatHistory() returns empty string for a fresh session (no turns)", () => {
-    const id = store.create();
-    expect(store.formatHistory(id)).toBe("");
-  });
-
   it("formatHistory() returns empty string for unknown session ID", () => {
     expect(store.formatHistory("00000000-0000-4000-8000-000000000000")).toBe("");
   });
 
   it("formatHistory() wraps turns in [Conversation history] block", () => {
-    const id = store.create();
-    store.appendTurn(id, "what is 2+2?", "4");
+    const id = store.createWithTurn("what is 2+2?", "4");
 
     const history = store.formatHistory(id);
     expect(history).toContain("[Conversation history]");
@@ -126,8 +130,7 @@ describe("SessionStore", () => {
   });
 
   it("formatHistory() includes all turns in order", () => {
-    const id = store.create();
-    store.appendTurn(id, "q1", "a1");
+    const id = store.createWithTurn("q1", "a1");
     store.appendTurn(id, "q2", "a2");
 
     const history = store.formatHistory(id);
@@ -143,13 +146,13 @@ describe("SessionStore", () => {
   // ── Multiple independent sessions ──────────────────────────────────────────
 
   it("two sessions are completely independent", () => {
-    const id1 = store.create();
-    const id2 = store.create();
+    const id1 = store.createWithTurn("session 1 question", "session 1 answer");
+    const id2 = store.createWithTurn("session 2 question", "session 2 answer");
     store.appendTurn(id1, "session 1 question", "session 1 answer");
 
-    expect(store.get(id1)!.turns).toHaveLength(2);
-    expect(store.get(id2)!.turns).toHaveLength(0);
-    expect(store.formatHistory(id2)).toBe("");
+    expect(store.get(id1)!.turns).toHaveLength(4);
+    expect(store.get(id2)!.turns).toHaveLength(2);
+    expect(store.formatHistory(id2)).not.toContain("session 1 question");
   });
 
   // ── TTL / garbage collection ───────────────────────────────────────────────
@@ -158,7 +161,7 @@ describe("SessionStore", () => {
     const TTL = 1000;
     const GC = 500;
     const s = new SessionStore(TTL, GC);
-    const id = s.create();
+    const id = s.createWithTurn("q", "a");
 
     vi.advanceTimersByTime(GC + 1); // GC runs once
     expect(s.get(id)).not.toBeNull(); // Still alive — TTL not reached
@@ -170,7 +173,7 @@ describe("SessionStore", () => {
     const TTL = 1000;
     const GC = 500;
     const s = new SessionStore(TTL, GC);
-    const id = s.create();
+    const id = s.createWithTurn("q", "a");
 
     vi.advanceTimersByTime(TTL + GC + 1); // TTL elapsed, then GC fires
     expect(s.get(id)).toBeNull();
@@ -182,7 +185,7 @@ describe("SessionStore", () => {
     const TTL = 1000;
     const GC = 400;
     const s = new SessionStore(TTL, GC);
-    const id = s.create();
+    const id = s.createWithTurn("q", "a");
 
     // Keep accessing the session to refresh lastAccessed
     vi.advanceTimersByTime(800);
@@ -193,11 +196,27 @@ describe("SessionStore", () => {
     s.destroy();
   });
 
+  it("GC logs when expired sessions are evicted", () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const s = new SessionStore(1000, 500);
+    s.createWithTurn("q", "a");
+
+    try {
+      vi.advanceTimersByTime(1501);
+      expect(stderrSpy).toHaveBeenCalledWith(
+        "[gemini-cli-mcp] GC: evicted 1 expired session(s)\n"
+      );
+    } finally {
+      stderrSpy.mockRestore();
+      s.destroy();
+    }
+  });
+
   // ── destroy() ─────────────────────────────────────────────────────────────
 
   it("destroy() stops the GC timer (no pending timers after destroy)", () => {
     const s = new SessionStore(1000, 500);
-    const id = s.create();
+    const id = s.createWithTurn("q", "a");
     s.destroy();
 
     // After destroy, GC should not fire even if time advances past TTL

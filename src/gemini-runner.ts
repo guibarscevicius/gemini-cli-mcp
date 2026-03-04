@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-// Timeout for a single Gemini subprocess call
+// 60 s - generous for large file analysis; increase if prompts regularly time out
 const TIMEOUT_MS = 60_000;
 
 export interface GeminiOptions {
@@ -38,6 +38,14 @@ export async function runGemini(
   opts: GeminiOptions = {},
   executor: GeminiExecutor = defaultExecutor
 ): Promise<string> {
+  const homeDir = process.env.HOME;
+  if (!homeDir) {
+    throw new Error(
+      "HOME environment variable is not set. " +
+        "The Gemini CLI requires HOME to locate OAuth credentials (~/.config/gemini)."
+    );
+  }
+
   const args: string[] = [
     "--yolo",
     "--output-format",
@@ -55,7 +63,7 @@ export async function runGemini(
     const result = await executor(args, {
       // Restrict inherited environment to only what Gemini CLI needs for auth
       env: {
-        HOME: process.env.HOME ?? "",
+        HOME: homeDir,
         PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
       },
       cwd: opts.cwd, // undefined = MCP server CWD; set to enable relative @file paths
@@ -65,9 +73,15 @@ export async function runGemini(
     stdout = result.stdout;
   } catch (err: unknown) {
     // execFile throws on non-zero exit; include stderr in message if available
-    const execErr = err as { stderr?: string; message?: string };
+    const execErr = err as { code?: string; stderr?: string; message?: string };
     const detail = execErr.stderr?.trim() || execErr.message || String(err);
-    throw new Error(`gemini process failed: ${detail}`);
+    if (execErr.code === "ENOENT") {
+      throw new Error(
+        "gemini binary not found. Is the Gemini CLI installed and on PATH?",
+        { cause: err }
+      );
+    }
+    throw new Error(`gemini process failed: ${detail}`, { cause: err });
   }
 
   return parseGeminiOutput(stdout);
@@ -88,9 +102,9 @@ export interface GeminiJsonOutput {
  * Throws descriptive errors for all failure modes so callers can diagnose issues.
  */
 export function parseGeminiOutput(raw: string): string {
-  let parsed: GeminiJsonOutput;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw) as GeminiJsonOutput;
+    parsed = JSON.parse(raw);
   } catch {
     // If JSON parse fails, the raw stdout shape is unknown — surface it clearly
     // so the caller (and developer) can see it and update field names.
@@ -99,18 +113,26 @@ export function parseGeminiOutput(raw: string): string {
     );
   }
 
-  if (parsed.error) {
-    throw new Error(`gemini error: ${parsed.error}`);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(
+      `gemini process returned unexpected JSON shape (${typeof parsed}): ${raw.slice(0, 200)}`
+    );
+  }
+
+  const output = parsed as GeminiJsonOutput;
+
+  if (output.error) {
+    throw new Error(`gemini error: ${output.error}`);
   }
 
   // Try known field names in priority order
-  const text = parsed.response ?? parsed.text ?? parsed.content;
+  const text = output.response ?? output.text ?? output.content;
   if (typeof text === "string") {
     return text;
   }
 
   // Unknown shape — dump it so the developer can add the correct field name
   throw new Error(
-    `gemini JSON output has unexpected shape. Parsed object:\n${JSON.stringify(parsed, null, 2)}`
+    `gemini JSON output has unexpected shape. Parsed object:\n${JSON.stringify(output, null, 2)}`
   );
 }
