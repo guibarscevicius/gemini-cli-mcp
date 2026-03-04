@@ -81,6 +81,8 @@ export async function runGemini(
         { cause: err }
       );
     }
+    // Gemini CLI emits "Path not in workspace" for workspace boundary violations.
+    // If this hint stops appearing, check whether the CLI error wording has changed.
     const workspaceHint = detail.includes("Path not in workspace")
       ? " — pass cwd pointing to the project root containing your @file targets"
       : "";
@@ -125,6 +127,8 @@ export function parseGeminiOutput(raw: string): string {
   const output = parsed as GeminiJsonOutput;
 
   if (output.error) {
+    // Gemini CLI emits "Path not in workspace" for workspace boundary violations.
+    // If this hint stops appearing, check whether the CLI error wording has changed.
     const workspaceHint = output.error.includes("Path not in workspace")
       ? " — pass cwd pointing to the project root containing your @file targets"
       : "";

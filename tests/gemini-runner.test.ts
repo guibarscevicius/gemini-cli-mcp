@@ -78,6 +78,15 @@ describe("parseGeminiOutput", () => {
     }
   });
 
+  it("does NOT append cwd hint to unrelated JSON errors", () => {
+    expect(() =>
+      parseGeminiOutput(JSON.stringify({ error: "rate limit exceeded" }))
+    ).toThrow("gemini error: rate limit exceeded");
+    expect(() =>
+      parseGeminiOutput(JSON.stringify({ error: "rate limit exceeded" }))
+    ).not.toThrow("pass cwd pointing to the project root");
+  });
+
   it("throws on non-JSON input", () => {
     expect(() => parseGeminiOutput("not json at all")).toThrow(
       "gemini returned non-JSON output"
@@ -334,6 +343,18 @@ describe("runGemini", () => {
       const msg = (err as Error).message;
       expect(msg).toContain("Path not in workspace");
       expect(msg).toContain("pass cwd pointing to the project root");
+    }
+  });
+
+  it("does NOT append cwd hint when stderr error is unrelated to workspace paths", async () => {
+    const exec = makeErrorExecutor({ stderr: "authentication error", message: "exit code 1" });
+    try {
+      await runGemini("hello", {}, exec);
+      expect.fail("should have thrown");
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).toContain("authentication error");
+      expect(msg).not.toContain("pass cwd pointing to the project root");
     }
   });
 
