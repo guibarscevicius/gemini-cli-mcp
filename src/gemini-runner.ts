@@ -90,7 +90,7 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
       try {
         realAbsPath = await realpath(absPath);
       } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
+        const code = (err as { code?: string }).code;
         const detail = code === "EACCES" ? "permission denied" : "does not exist";
         throw new Error(`File not found: @${rawPath} — ${absPath} ${detail}`, { cause: err });
       }
@@ -109,7 +109,7 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
       try {
         content = await readFile(realAbsPath, "utf-8");
       } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code ?? "unknown";
+        const code = (err as { code?: string }).code ?? "unknown";
         const detail = readErrorDetails[code] ?? `read failed (${code})`;
         throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
       }
