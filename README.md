@@ -16,6 +16,8 @@ A safe, auditable MCP server that wraps the official [`@google/gemini-cli`](http
 
 ## Prerequisites
 
+- **Node.js ≥ 24** (Active LTS) — [nodejs.org/en/download](https://nodejs.org/en/download)
+
 1. Install and authenticate the Gemini CLI:
    ```bash
    npm install -g @google/gemini-cli
