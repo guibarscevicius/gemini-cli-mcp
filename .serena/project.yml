@@ -1,0 +1,46 @@
+project_name: "gemini-cli-mcp"
+
+# Language servers to start. Use "typescript" for JavaScript too.
+languages:
+  - typescript
+
+encoding: "utf-8"
+
+# If unset, falls back to global serena_config.yml setting (LSP or JetBrains).
+language_backend:
+
+# Honour project .gitignore when indexing files.
+ignore_all_files_in_gitignore: true
+
+# Additional paths to ignore beyond .gitignore.
+ignored_paths: []
+
+read_only: false
+
+# Tool names to disable (empty = all tools enabled).
+excluded_tools: []
+
+included_optional_tools: []
+
+# Non-empty list replaces Serena's default tool set entirely.
+fixed_tools: []
+
+# Modes always active for this project (overrides global base_modes if set).
+base_modes:
+
+# Modes active by default (overrides global default_modes if set).
+default_modes:
+
+# Shown to the LLM every time the project is activated.
+initial_prompt: |
+  TypeScript MCP server wrapping @google/gemini-cli. Exposes two tools:
+  ask-gemini (start session) and gemini-reply (continue session).
+  Key source files:
+    src/gemini-runner.ts  — subprocess execution and JSON output parsing
+    src/tools/ask-gemini.ts, src/tools/gemini-reply.ts — MCP tool handlers
+    src/session-store.ts  — in-process multi-turn session management
+    src/dispatcher.ts     — routes MCP tool calls + error handling
+  Tests: vitest (npm test). Build: tsc (npm run build).
+
+# Seconds per tool call for symbol info retrieval. Null = global default.
+symbol_info_budget:

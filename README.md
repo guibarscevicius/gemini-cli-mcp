@@ -140,6 +140,8 @@ npm run build
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | node dist/index.js
 ```
 
+The repo includes a `.mcp.json` that enables [Serena](https://github.com/oraios/serena) for semantic code navigation in Claude Code. Serena is optional but recommended — install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) first, then Claude Code will prompt you to enable it when you open the project.
+
 ## How sessions work
 
 Since `gemini --resume <id>` is scoped to a project directory and cannot be used from a global MCP server, this server manages conversation history in-process. On each `gemini-reply` call, prior turns are prepended as a structured context block:

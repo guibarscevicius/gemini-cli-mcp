@@ -14,7 +14,7 @@ export const AskGeminiSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Working directory for the Gemini subprocess. Required when using relative @file paths in the prompt."
+      "Working directory for the Gemini subprocess. Required for any @file path — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected."
     ),
 });
 
@@ -56,7 +56,7 @@ export const askGeminiToolDefinition = {
       cwd: {
         type: "string",
         description:
-          "Working directory for the subprocess. Required when using relative @file paths in the prompt (e.g. @src/auth.ts). Use absolute paths to avoid needing cwd.",
+          "Working directory for the subprocess. Required for any @file path (relative or absolute) — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected.",
       },
     },
     required: ["prompt"],

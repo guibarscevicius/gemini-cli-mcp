@@ -51,6 +51,42 @@ describe("parseGeminiOutput", () => {
     ).toThrow("gemini error: oops");
   });
 
+  it("appends cwd hint when JSON error field contains 'Path not in workspace'", () => {
+    expect(() =>
+      parseGeminiOutput(
+        JSON.stringify({
+          error:
+            "Error executing tool read_file: Path not in workspace: /other/project/foo.ts",
+        })
+      )
+    ).toThrow("pass cwd pointing to the project root containing your @file targets");
+  });
+
+  it("preserves original Path-not-in-workspace detail in JSON error path", () => {
+    expect.assertions(2);
+    try {
+      parseGeminiOutput(
+        JSON.stringify({
+          error: "Error executing tool read_file: Path not in workspace: /other/project",
+        })
+      );
+      expect.fail("should have thrown");
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).toContain("Path not in workspace");
+      expect(msg).toContain("pass cwd pointing to the project root");
+    }
+  });
+
+  it("does NOT append cwd hint to unrelated JSON errors", () => {
+    expect(() =>
+      parseGeminiOutput(JSON.stringify({ error: "rate limit exceeded" }))
+    ).toThrow("gemini error: rate limit exceeded");
+    expect(() =>
+      parseGeminiOutput(JSON.stringify({ error: "rate limit exceeded" }))
+    ).not.toThrow("pass cwd pointing to the project root");
+  });
+
   it("throws on non-JSON input", () => {
     expect(() => parseGeminiOutput("not json at all")).toThrow(
       "gemini returned non-JSON output"
@@ -283,6 +319,43 @@ describe("runGemini", () => {
     await expect(runGemini("hello", {}, exec)).rejects.toThrow(
       "gemini process failed: ETIMEDOUT"
     );
+  });
+
+  it("appends cwd hint when stderr contains 'Path not in workspace'", async () => {
+    const exec = makeErrorExecutor({
+      stderr:
+        'Error executing tool read_file: Path not in workspace: Attempted path "/other/project/foo.ts" resolves outside the allowed workspace directories: /home/gui/projects/myapp',
+    });
+    await expect(runGemini("review @foo.ts", {}, exec)).rejects.toThrow(
+      "pass cwd pointing to the project root containing your @file targets"
+    );
+  });
+
+  it("preserves original Path-not-in-workspace detail alongside the cwd hint", async () => {
+    expect.assertions(2);
+    const exec = makeErrorExecutor({
+      stderr: "Error executing tool read_file: Path not in workspace: /other/project",
+    });
+    try {
+      await runGemini("review @foo.ts", {}, exec);
+      expect.fail("should have thrown");
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).toContain("Path not in workspace");
+      expect(msg).toContain("pass cwd pointing to the project root");
+    }
+  });
+
+  it("does NOT append cwd hint when stderr error is unrelated to workspace paths", async () => {
+    const exec = makeErrorExecutor({ stderr: "authentication error", message: "exit code 1" });
+    try {
+      await runGemini("hello", {}, exec);
+      expect.fail("should have thrown");
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).toContain("authentication error");
+      expect(msg).not.toContain("pass cwd pointing to the project root");
+    }
   });
 
   it("propagates JSON parse errors from parseGeminiOutput", async () => {
