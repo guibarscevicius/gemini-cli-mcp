@@ -8,3 +8,6 @@ dist/
 *.key
 npm-debug.log*
 .DS_Store
+
+# Claude Code project-local state (settings, subagent memory — not team-shared)
+.claude/
