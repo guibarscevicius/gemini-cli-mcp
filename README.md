@@ -147,7 +147,7 @@ Since `gemini --resume <id>` is scoped to a project directory and cannot be used
 ```
 [Conversation history]
 User: <turn 1 prompt>
-Gemini: <turn 1 response>
+Assistant: <turn 1 response>
 ...
 [End of history — continue the conversation]
 

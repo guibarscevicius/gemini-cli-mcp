@@ -32,6 +32,12 @@ describe("parseGeminiOutput", () => {
     ).toBe("primary");
   });
 
+  it("text field takes priority over content when response is absent", () => {
+    expect(
+      parseGeminiOutput(JSON.stringify({ text: "from text", content: "from content" }))
+    ).toBe("from text");
+  });
+
   it("throws 'gemini error: ...' when error field is present", () => {
     expect(() =>
       parseGeminiOutput(JSON.stringify({ error: "rate limit exceeded" }))
@@ -67,6 +73,12 @@ describe("parseGeminiOutput", () => {
     expect(() =>
       parseGeminiOutput(JSON.stringify({ unknown_field: "value", stats: {} }))
     ).toThrow("gemini JSON output has unexpected shape");
+  });
+
+  it("throws when parsed JSON is not an object", () => {
+    expect(() => parseGeminiOutput(JSON.stringify("hello"))).toThrow(
+      "gemini process returned unexpected JSON shape"
+    );
   });
 
   it("unexpected shape error includes the parsed object for debugging", () => {
@@ -162,6 +174,25 @@ describe("runGemini", () => {
     expect(envKeys.sort()).toEqual(["HOME", "PATH"]);
   });
 
+  it("uses the default PATH when PATH is not set", async () => {
+    const originalPath = process.env.PATH;
+    delete process.env.PATH;
+
+    try {
+      const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+      await runGemini("hello", {}, exec);
+
+      const capturedOpts = vi.mocked(exec).mock.calls[0][1];
+      expect(capturedOpts.env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = originalPath;
+      }
+    }
+  });
+
   it("passes cwd option through to executor", async () => {
     const exec = makeExecutor(JSON.stringify({ response: "ok" }));
     await runGemini("hello", { cwd: "/some/project" }, exec);
@@ -194,13 +225,57 @@ describe("runGemini", () => {
     expect(capturedOpts.maxBuffer).toBe(10 * 1024 * 1024);
   });
 
+  it("fails fast when HOME is not set", async () => {
+    const originalHome = process.env.HOME;
+    delete process.env.HOME;
+
+    try {
+      const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+      await expect(runGemini("hello", {}, exec)).rejects.toThrow(
+        "HOME environment variable is not set"
+      );
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
   // ── Error handling ─────────────────────────────────────────────────────────
+
+  it("returns a specific error when the gemini binary is missing", async () => {
+    const enoent = Object.assign(new Error("spawn gemini ENOENT"), { code: "ENOENT" });
+    const exec = makeErrorExecutor(enoent);
+
+    await expect(runGemini("hello", {}, exec)).rejects.toThrow(
+      "gemini binary not found. Is the Gemini CLI installed and on PATH?"
+    );
+  });
 
   it("wraps executor rejection with stderr detail when available", async () => {
     const exec = makeErrorExecutor({ stderr: "authentication error", message: "exit code 1" });
     await expect(runGemini("hello", {}, exec)).rejects.toThrow(
       "gemini process failed: authentication error"
     );
+  });
+
+  it("preserves the original executor error as cause", async () => {
+    expect.assertions(2);
+    const original = Object.assign(new Error("exit code 1"), {
+      stderr: "authentication error",
+    });
+    const exec = makeErrorExecutor(original);
+
+    try {
+      await runGemini("hello", {}, exec);
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as Error).message).toContain("authentication error");
+      expect((err as Error & { cause?: unknown }).cause).toBe(original);
+    }
   });
 
   it("falls back to error.message when stderr is empty", async () => {

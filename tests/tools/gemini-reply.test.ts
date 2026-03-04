@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { ZodError } from "zod";
 
 vi.mock("../../src/gemini-runner.js", () => ({
   runGemini: vi.fn(),
@@ -58,6 +59,11 @@ describe("geminiReply", () => {
     const [calledPrompt] = vi.mocked(mockRunGemini).mock.calls[0];
     // Exact separator matters: \n\n is the boundary Gemini uses to parse context vs new prompt
     expect(calledPrompt).toBe(`${history}\n\nwhat did I say?`);
+  });
+
+  it("formats history using the session ID, not the prompt", async () => {
+    await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "new question" });
+    expect(mockStore.formatHistory).toHaveBeenCalledWith(VALID_SESSION_ID);
   });
 
   it("passes model option to runGemini when provided", async () => {
@@ -129,25 +135,27 @@ describe("geminiReply", () => {
   // ── Input validation (Zod) ─────────────────────────────────────────────────
 
   it("throws ZodError for missing sessionId", async () => {
-    await expect(geminiReply({ prompt: "hello" } as Parameters<typeof geminiReply>[0])).rejects.toThrow();
+    await expect(
+      geminiReply({ prompt: "hello" } as Parameters<typeof geminiReply>[0])
+    ).rejects.toThrow(ZodError);
   });
 
   it("throws ZodError for non-UUID sessionId", async () => {
     await expect(
       geminiReply({ sessionId: "not-a-uuid", prompt: "hello" })
-    ).rejects.toThrow();
+    ).rejects.toThrow(ZodError);
   });
 
   it("throws ZodError for missing prompt", async () => {
     await expect(
       geminiReply({ sessionId: VALID_SESSION_ID } as Parameters<typeof geminiReply>[0])
-    ).rejects.toThrow();
+    ).rejects.toThrow(ZodError);
   });
 
   it("throws ZodError for empty prompt", async () => {
     await expect(
       geminiReply({ sessionId: VALID_SESSION_ID, prompt: "" })
-    ).rejects.toThrow();
+    ).rejects.toThrow(ZodError);
   });
 
   // ── Error propagation ──────────────────────────────────────────────────────
@@ -165,5 +173,27 @@ describe("geminiReply", () => {
       geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" })
     ).rejects.toThrow();
     expect(mockStore.appendTurn).not.toHaveBeenCalled();
+  });
+
+  it("returns the response even if the session is evicted before appendTurn", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    mockStore.appendTurn.mockImplementationOnce(() => {
+      throw new Error("Session not found: expired");
+    });
+
+    try {
+      await expect(
+        geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" })
+      ).resolves.toEqual({
+        response: "Gemini follow-up response.",
+      });
+      expect(stderrSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Session ${VALID_SESSION_ID} evicted during runGemini; response computed but history not persisted`
+        )
+      );
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 });

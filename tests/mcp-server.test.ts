@@ -95,10 +95,19 @@ describe("MCP dispatcher (handleCallTool)", () => {
   // ── Error wrapping ─────────────────────────────────────────────────────────
 
   it("wraps non-McpError as isError response (not a throw)", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     mockAskGemini.mockRejectedValue(new Error("subprocess crashed"));
-    const result = await handleCallTool("ask-gemini", { prompt: "hello" });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("subprocess crashed");
+
+    try {
+      const result = await handleCallTool("ask-gemini", { prompt: "hello" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("subprocess crashed");
+      expect(stderrSpy).toHaveBeenCalledWith(
+        expect.stringContaining('\nError: subprocess crashed')
+      );
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 
   it("re-throws McpError without wrapping it", async () => {

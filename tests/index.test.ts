@@ -1,0 +1,65 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+
+vi.mock("../src/dispatcher.js", () => ({
+  handleCallTool: vi.fn(),
+}));
+
+import { handleCallTool } from "../src/dispatcher.js";
+import { registerToolHandlers } from "../src/index.js";
+import { askGeminiToolDefinition } from "../src/tools/ask-gemini.js";
+import { geminiReplyToolDefinition } from "../src/tools/gemini-reply.js";
+
+type RequestHandler = (request: { params: Record<string, unknown> }) => Promise<unknown>;
+
+const mockHandleCallTool = vi.mocked(handleCallTool);
+
+describe("index wiring", () => {
+  let handlers: Map<unknown, RequestHandler>;
+
+  beforeEach(() => {
+    handlers = new Map();
+    vi.clearAllMocks();
+    mockHandleCallTool.mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+    });
+
+    registerToolHandlers({
+      setRequestHandler(schema, handler) {
+        handlers.set(schema, handler as RequestHandler);
+        return this;
+      },
+    } as Parameters<typeof registerToolHandlers>[0]);
+  });
+
+  it("registers the list-tools handler with both tool definitions", async () => {
+    const listTools = handlers.get(ListToolsRequestSchema);
+    expect(listTools).toBeDefined();
+    await expect(listTools!({ params: {} })).resolves.toEqual({
+      tools: [askGeminiToolDefinition, geminiReplyToolDefinition],
+    });
+  });
+
+  it("passes request.params.arguments to handleCallTool", async () => {
+    const callTool = handlers.get(CallToolRequestSchema);
+    const args = { prompt: "hello" };
+    const response = { content: [{ type: "text", text: "ok" }] };
+    mockHandleCallTool.mockResolvedValueOnce(response);
+
+    expect(callTool).toBeDefined();
+    await expect(
+      callTool!({
+        params: {
+          name: "ask-gemini",
+          arguments: args,
+          args: { prompt: "wrong" },
+        },
+      })
+    ).resolves.toBe(response);
+
+    expect(mockHandleCallTool).toHaveBeenCalledWith("ask-gemini", args);
+  });
+});

@@ -12,7 +12,7 @@ import { geminiReply } from "./tools/gemini-reply.js";
 
 export type ToolResponse = {
   content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
+  isError?: true;
 };
 
 /**
@@ -44,7 +44,9 @@ export async function handleCallTool(
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
   } catch (err) {
-    // Protocol-level errors: re-throw so the MCP SDK can encode them correctly
+    // Protocol-level errors: re-throw so the MCP SDK encodes them as JSON-RPC errors.
+    // If caught here, the ErrorCode is discarded and the host receives an opaque isError
+    // content response - breaking clients that branch on error codes.
     if (err instanceof McpError) throw err;
 
     // Input validation failure: surface field-level details as a protocol error
@@ -59,8 +61,9 @@ export async function handleCallTool(
 
     // Unexpected runtime error — log to stderr for debugging, return as tool error
     const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? `\n${err.stack}` : "";
     process.stderr.write(
-      `[gemini-cli-mcp] Unexpected error in tool "${name}": ${message}\n`
+      `[gemini-cli-mcp] Unexpected error in tool "${name}": ${message}${stack}\n`
     );
     return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
   }
