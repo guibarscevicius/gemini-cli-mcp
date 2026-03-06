@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import * as nodePath from "node:path";
 import { promisify } from "node:util";
-import { glob } from "glob";
+import { escape as escapeGlob, glob } from "glob";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,18 +24,112 @@ const defaultExecutor: GeminiExecutor = (args, opts) =>
   execFileAsync("gemini", args, opts) as Promise<{ stdout: string }>;
 
 /**
- * Matches @file tokens where @ is preceded by whitespace or start of string.
- * Requires the path portion to contain at least one `/` or `.` character —
- * this excludes bare @mentions and most email addresses.
- * Trailing sentence punctuation (,;:!?)] is excluded from the path capture.
+ * Two-phase @file extraction (greedy regex → balanced-delimiter state machine).
  *
- * Capture group: [1] = path after @.
+ * Phase 1 — GREEDY_AT_RE: captures everything after `@` up to whitespace, `@`,
+ * `,`, or `;`. Intentionally over-captures so that paths containing `()` and
+ * `[]` (Next.js route groups, dynamic segments, SvelteKit params) are not
+ * truncated by the regex.
+ *
+ * Phase 2 — extractBalancedPath(): walks the captured token tracking `()` and
+ * `[]` depth. Unmatched trailing `)` or `]` at depth 0 are stripped as
+ * punctuation. Trailing `:!?` are also stripped.
+ *
+ * This mirrors the CommonMark spec's approach for parsing URLs with balanced
+ * parentheses.
  */
-const FILE_REF_RE = /(?:^|(?<=\s))@([^\s@,;:!?)\]]*[/.][^\s@,;:!?)\]]*)/g;
+const GREEDY_AT_RE = /(?:^|(?<=\s))@([^\s@,;]+)/g;
+
+/**
+ * Strip unmatched trailing `)` / `]` and trailing punctuation from a
+ * greedily-captured @file token.
+ *
+ * Walks left-to-right tracking depth for `()` and `[]` pairs. At the end,
+ * trims any trailing characters that are unmatched closers or sentence
+ * punctuation (`:!?`).
+ */
+function extractBalancedPath(raw: string): string {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let end = raw.length;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "(") parenDepth++;
+    else if (ch === ")") {
+      if (parenDepth > 0) parenDepth--;
+      // else: unmatched — will be trimmed from the end
+    } else if (ch === "[") bracketDepth++;
+    else if (ch === "]") {
+      if (bracketDepth > 0) bracketDepth--;
+    }
+  }
+
+  // Trim unmatched trailing closers and punctuation from the right
+  while (end > 0) {
+    const ch = raw[end - 1];
+    if (ch === ")" && parenDepth <= 0) {
+      // Count unmatched closing parens remaining in suffix
+      let unmatchedClose = 0;
+      let d = 0;
+      for (let i = 0; i < end; i++) {
+        if (raw[i] === "(") d++;
+        else if (raw[i] === ")") {
+          if (d > 0) d--;
+          else unmatchedClose++;
+        }
+      }
+      if (unmatchedClose > 0) { end--; continue; }
+      break;
+    }
+    if (ch === "]" && bracketDepth <= 0) {
+      let unmatchedClose = 0;
+      let d = 0;
+      for (let i = 0; i < end; i++) {
+        if (raw[i] === "[") d++;
+        else if (raw[i] === "]") {
+          if (d > 0) d--;
+          else unmatchedClose++;
+        }
+      }
+      if (unmatchedClose > 0) { end--; continue; }
+      break;
+    }
+    if (":!?".includes(ch)) { end--; continue; }
+    break;
+  }
+
+  return raw.slice(0, end);
+}
+
+/** Result from extracting a single @file reference. */
+interface FileRef {
+  path: string;
+  index: number;
+}
+
+/**
+ * Extract @file references from a prompt using the two-phase approach.
+ * Returns only tokens whose path contains at least one `/` or `.` — this
+ * rejects bare @mentions (e.g. @alice) and most email-like patterns.
+ */
+function extractFileRefs(text: string): FileRef[] {
+  const refs: FileRef[] = [];
+  // Reset lastIndex for global regex
+  GREEDY_AT_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = GREEDY_AT_RE.exec(text)) !== null) {
+    const balanced = extractBalancedPath(match[1]);
+    if (/[/.]/.test(balanced)) {
+      refs.push({ path: balanced, index: match.index });
+    }
+  }
+  return refs;
+}
 
 /** Count the number of @file tokens in a prompt. */
 function countFileRefs(prompt: string): number {
-  return [...prompt.matchAll(FILE_REF_RE)].length;
+  return extractFileRefs(prompt).length;
 }
 
 /**
@@ -50,9 +144,25 @@ function countFileRefs(prompt: string): number {
  * Throws if any referenced file is not found, is a directory, or resolves
  * (following symlinks) to a path outside `cwd`.
  */
+
+/**
+ * Escape `[]` in path segments that are not glob wildcards, so that literal
+ * directory names like `[slug]` are not interpreted as glob character classes.
+ *
+ * Splits the path on `/`, and for each segment that does NOT contain `*`, `?`,
+ * or `{`, escapes it with `glob.escape()`. Segments that contain wildcards are
+ * left untouched so the glob engine can interpret them.
+ */
+function escapeGlobSegments(rawPath: string): string {
+  return rawPath
+    .split("/")
+    .map((seg) => (/[*?{]/.test(seg) ? seg : escapeGlob(seg)))
+    .join("/");
+}
+
 export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
-  const matches = [...prompt.matchAll(FILE_REF_RE)];
-  if (matches.length < 2) return prompt;
+  const refs = extractFileRefs(prompt);
+  if (refs.length < 2) return prompt;
 
   const cwdResolved = nodePath.resolve(cwd);
   let realCwd: string;
@@ -64,13 +174,13 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
 
   const sections: string[] = [];
 
-  for (const match of matches) {
-    const rawPath = match[1]; // capture group 1 is the path after @
+  for (const ref of refs) {
+    const rawPath = ref.path;
 
     let filePaths: string[];
     if (/[*?{]/.test(rawPath)) {
       try {
-        filePaths = await glob(rawPath, { cwd: realCwd, absolute: true, nodir: true });
+        filePaths = await glob(escapeGlobSegments(rawPath), { cwd: realCwd, absolute: true, nodir: true });
       } catch (err) {
         throw new Error(
           `Failed to expand glob pattern @${rawPath} in ${realCwd}: ${(err as Error).message}`,

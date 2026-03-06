@@ -575,6 +575,151 @@ describe("expandFileRefs", () => {
       await fs.rm(dir, { recursive: true });
     }
   });
+
+  // ── Bracket / paren path support (issue #9) ──────────────────────────────
+
+  it("expands Next.js route group paths with ()", async () => {
+    const dir = await makeTmpDir({
+      "app/(marketing)/page.tsx": "// marketing page",
+      "app/(marketing)/layout.tsx": "// marketing layout",
+    });
+    try {
+      const result = await expandFileRefs(
+        "Review @app/(marketing)/page.tsx and @app/(marketing)/layout.tsx",
+        dir
+      );
+      expect(result).toContain("Content from @app/(marketing)/page.tsx:");
+      expect(result).toContain("// marketing page");
+      expect(result).toContain("Content from @app/(marketing)/layout.tsx:");
+      expect(result).toContain("// marketing layout");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
+  it("expands Next.js dynamic route paths with []", async () => {
+    const dir = await makeTmpDir({
+      "app/blog/[slug]/page.tsx": "// blog slug page",
+      "lib/utils.ts": "// utils",
+    });
+    try {
+      const result = await expandFileRefs(
+        "Compare @app/blog/[slug]/page.tsx and @lib/utils.ts",
+        dir
+      );
+      expect(result).toContain("Content from @app/blog/[slug]/page.tsx:");
+      expect(result).toContain("// blog slug page");
+      expect(result).toContain("Content from @lib/utils.ts:");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
+  it("expands catch-all route paths with nested [[...slug]]", async () => {
+    const dir = await makeTmpDir({
+      "app/[[...slug]]/page.tsx": "// catch-all page",
+      "lib/index.ts": "// lib index",
+    });
+    try {
+      const result = await expandFileRefs(
+        "Review @app/[[...slug]]/page.tsx and @lib/index.ts",
+        dir
+      );
+      expect(result).toContain("Content from @app/[[...slug]]/page.tsx:");
+      expect(result).toContain("// catch-all page");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
+  it("expands intercepting route paths with (.)", async () => {
+    const dir = await makeTmpDir({
+      "app/(.)photo/page.tsx": "// intercepting photo",
+      "app/layout.tsx": "// root layout",
+    });
+    try {
+      const result = await expandFileRefs(
+        "Review @app/(.)photo/page.tsx and @app/layout.tsx",
+        dir
+      );
+      expect(result).toContain("Content from @app/(.)photo/page.tsx:");
+      expect(result).toContain("// intercepting photo");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
+  it("expands paths with mixed () and [] segments", async () => {
+    const dir = await makeTmpDir({
+      "app/(marketing)/[slug]/page.tsx": "// marketing slug",
+      "app/layout.tsx": "// layout",
+    });
+    try {
+      const result = await expandFileRefs(
+        "Review @app/(marketing)/[slug]/page.tsx and @app/layout.tsx",
+        dir
+      );
+      expect(result).toContain("Content from @app/(marketing)/[slug]/page.tsx:");
+      expect(result).toContain("// marketing slug");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
+  it("strips trailing unmatched ) as punctuation — regression guard", async () => {
+    const dir = await makeTmpDir({
+      "a.ts": "// file a",
+      "b.ts": "// file b",
+    });
+    try {
+      // The outer parens are sentence punctuation, not part of the path
+      const result = await expandFileRefs("(see @a.ts and @b.ts)", dir);
+      expect(result).toContain("Content from @a.ts:");
+      expect(result).toContain("Content from @b.ts:");
+      // The trailing ) should NOT be part of the path
+      expect(result).not.toContain("Content from @b.ts):");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
+  it("expands glob patterns alongside literal bracket paths", async () => {
+    const dir = await makeTmpDir({
+      "app/[slug]/page.tsx": "// slug page",
+      "app/[slug]/layout.tsx": "// slug layout",
+      "lib/utils.ts": "// utils",
+    });
+    try {
+      const result = await expandFileRefs(
+        "Review @app/[slug]/**/*.tsx and @lib/utils.ts",
+        dir
+      );
+      expect(result).toContain("[REFERENCE_CONTENT_START]");
+      expect(result).toContain("// slug page");
+      expect(result).toContain("// slug layout");
+      expect(result).toContain("// utils");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
+  it("expands SvelteKit-style dynamic route paths", async () => {
+    const dir = await makeTmpDir({
+      "src/routes/[id]/+page.svelte": "<script>// svelte page</script>",
+      "src/lib/index.ts": "// lib index",
+    });
+    try {
+      const result = await expandFileRefs(
+        "Review @src/routes/[id]/+page.svelte and @src/lib/index.ts",
+        dir
+      );
+      expect(result).toContain("Content from @src/routes/[id]/+page.svelte:");
+      expect(result).toContain("// svelte page");
+      expect(result).toContain("Content from @src/lib/index.ts:");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
 });
 
 // ── runGemini @file integration ─────────────────────────────────────────────
