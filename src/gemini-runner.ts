@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import * as nodePath from "node:path";
 import { promisify } from "node:util";
-import { glob } from "glob";
+import { escape as escapeGlob, glob } from "glob";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,18 +24,94 @@ const defaultExecutor: GeminiExecutor = (args, opts) =>
   execFileAsync("gemini", args, opts) as Promise<{ stdout: string }>;
 
 /**
- * Matches @file tokens where @ is preceded by whitespace or start of string.
- * Requires the path portion to contain at least one `/` or `.` character —
- * this excludes bare @mentions and most email addresses.
- * Trailing sentence punctuation (,;:!?)] is excluded from the path capture.
+ * Two-phase @file extraction (greedy regex → balanced-delimiter state machine).
  *
- * Capture group: [1] = path after @.
+ * Phase 1 — GREEDY_AT_RE: captures everything after `@` up to whitespace, `@`,
+ * `,`, or `;`. Intentionally over-captures so that paths containing `()` and
+ * `[]` (Next.js route groups, dynamic segments, SvelteKit params) are not
+ * truncated by the regex.
+ *
+ * Phase 2 — extractBalancedPath(): walks the captured token tracking `()` and
+ * `[]` depth. Unmatched trailing `)` or `]` at depth 0 are stripped as
+ * punctuation. Trailing `:!?` are also stripped.
+ *
+ * Inspired by CommonMark's balanced-parenthesis counting for link destinations
+ * (spec §6.7), but extended to handle `[]` and to trim (rather than reject)
+ * unmatched trailing closers.
  */
-const FILE_REF_RE = /(?:^|(?<=\s))@([^\s@,;:!?)\]]*[/.][^\s@,;:!?)\]]*)/g;
+const GREEDY_AT_RE = /(?:^|(?<=\s))@([^\s@,;]+)/g;
+
+/**
+ * Strip unmatched trailing `)` / `]` and trailing punctuation from a
+ * greedily-captured @file token.
+ *
+ * For each trailing `)` or `]`, re-scans `raw[0..end)` to check whether it
+ * has a matching opener. Unmatched trailing closers and trailing `:!?` are
+ * trimmed. Inspired by CommonMark's balanced-parenthesis counting for link
+ * destinations (spec §6.7), but extended to handle `[]` and to trim (rather
+ * than reject) unmatched trailing closers.
+ */
+function extractBalancedPath(raw: string): string {
+  let end = raw.length;
+
+  // Trim unmatched trailing closers and punctuation from the right
+  while (end > 0) {
+    const ch = raw[end - 1];
+    if (ch === ")" || ch === "]") {
+      const open = ch === ")" ? "(" : "[";
+      let depth = 0;
+      for (let i = 0; i < end; i++) {
+        if (raw[i] === open) depth++;
+        else if (raw[i] === ch) depth--;
+      }
+      // depth < 0 means more closers than openers — trailing one is unmatched
+      if (depth < 0) { end--; continue; }
+      break;
+    }
+    if (":!?".includes(ch)) { end--; continue; }
+    break;
+  }
+
+  return raw.slice(0, end);
+}
+
+/**
+ * Extract @file references from a prompt using the two-phase approach.
+ * Returns only tokens whose path contains at least one `/` or `.` — this
+ * rejects bare @mentions (e.g. @alice) and most email-like patterns.
+ */
+function extractFileRefs(text: string): string[] {
+  const paths: string[] = [];
+  // Reset lastIndex for global regex
+  GREEDY_AT_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = GREEDY_AT_RE.exec(text)) !== null) {
+    const balanced = extractBalancedPath(match[1]);
+    if (/[/.]/.test(balanced)) {
+      paths.push(balanced);
+    }
+  }
+  return paths;
+}
 
 /** Count the number of @file tokens in a prompt. */
 function countFileRefs(prompt: string): number {
-  return [...prompt.matchAll(FILE_REF_RE)].length;
+  return extractFileRefs(prompt).length;
+}
+
+/**
+ * Escape `[]` in path segments that are not glob wildcards, so that literal
+ * directory names like `[slug]` are not interpreted as glob character classes.
+ *
+ * Splits the path on `/`, and for each segment that does NOT contain `*`, `?`,
+ * or `{`, escapes it with `glob.escape()`. Segments that contain wildcards are
+ * left untouched so the glob engine can interpret them.
+ */
+function escapeGlobSegments(rawPath: string): string {
+  return rawPath
+    .split("/")
+    .map((seg) => (/[*?{]/.test(seg) ? seg : escapeGlob(seg)))
+    .join("/");
 }
 
 /**
@@ -51,8 +127,8 @@ function countFileRefs(prompt: string): number {
  * (following symlinks) to a path outside `cwd`.
  */
 export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
-  const matches = [...prompt.matchAll(FILE_REF_RE)];
-  if (matches.length < 2) return prompt;
+  const filePaths = extractFileRefs(prompt);
+  if (filePaths.length < 2) return prompt;
 
   const cwdResolved = nodePath.resolve(cwd);
   let realCwd: string;
@@ -64,13 +140,12 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
 
   const sections: string[] = [];
 
-  for (const match of matches) {
-    const rawPath = match[1]; // capture group 1 is the path after @
+  for (const rawPath of filePaths) {
 
     let filePaths: string[];
     if (/[*?{]/.test(rawPath)) {
       try {
-        filePaths = await glob(rawPath, { cwd: realCwd, absolute: true, nodir: true });
+        filePaths = await glob(escapeGlobSegments(rawPath), { cwd: realCwd, absolute: true, nodir: true });
       } catch (err) {
         throw new Error(
           `Failed to expand glob pattern @${rawPath} in ${realCwd}: ${(err as Error).message}`,
