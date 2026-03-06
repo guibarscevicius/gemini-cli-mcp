@@ -35,8 +35,9 @@ const defaultExecutor: GeminiExecutor = (args, opts) =>
  * `[]` depth. Unmatched trailing `)` or `]` at depth 0 are stripped as
  * punctuation. Trailing `:!?` are also stripped.
  *
- * This mirrors the CommonMark spec's approach for parsing URLs with balanced
- * parentheses.
+ * Inspired by CommonMark's balanced-parenthesis counting for link destinations
+ * (spec §6.7), but extended to handle `[]` and to trim (rather than reject)
+ * unmatched trailing closers.
  */
 const GREEDY_AT_RE = /(?:^|(?<=\s))@([^\s@,;]+)/g;
 
@@ -44,55 +45,27 @@ const GREEDY_AT_RE = /(?:^|(?<=\s))@([^\s@,;]+)/g;
  * Strip unmatched trailing `)` / `]` and trailing punctuation from a
  * greedily-captured @file token.
  *
- * Walks left-to-right tracking depth for `()` and `[]` pairs. At the end,
- * trims any trailing characters that are unmatched closers or sentence
- * punctuation (`:!?`).
+ * For each trailing `)` or `]`, re-scans `raw[0..end)` to check whether it
+ * has a matching opener. Unmatched trailing closers and trailing `:!?` are
+ * trimmed. Inspired by CommonMark's balanced-parenthesis counting for link
+ * destinations (spec §6.7), but extended to handle `[]` and to trim (rather
+ * than reject) unmatched trailing closers.
  */
 function extractBalancedPath(raw: string): string {
-  let parenDepth = 0;
-  let bracketDepth = 0;
   let end = raw.length;
-
-  for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i];
-    if (ch === "(") parenDepth++;
-    else if (ch === ")") {
-      if (parenDepth > 0) parenDepth--;
-      // else: unmatched — will be trimmed from the end
-    } else if (ch === "[") bracketDepth++;
-    else if (ch === "]") {
-      if (bracketDepth > 0) bracketDepth--;
-    }
-  }
 
   // Trim unmatched trailing closers and punctuation from the right
   while (end > 0) {
     const ch = raw[end - 1];
-    if (ch === ")" && parenDepth <= 0) {
-      // Count unmatched closing parens remaining in suffix
-      let unmatchedClose = 0;
-      let d = 0;
+    if (ch === ")" || ch === "]") {
+      const open = ch === ")" ? "(" : "[";
+      let depth = 0;
       for (let i = 0; i < end; i++) {
-        if (raw[i] === "(") d++;
-        else if (raw[i] === ")") {
-          if (d > 0) d--;
-          else unmatchedClose++;
-        }
+        if (raw[i] === open) depth++;
+        else if (raw[i] === ch) depth--;
       }
-      if (unmatchedClose > 0) { end--; continue; }
-      break;
-    }
-    if (ch === "]" && bracketDepth <= 0) {
-      let unmatchedClose = 0;
-      let d = 0;
-      for (let i = 0; i < end; i++) {
-        if (raw[i] === "[") d++;
-        else if (raw[i] === "]") {
-          if (d > 0) d--;
-          else unmatchedClose++;
-        }
-      }
-      if (unmatchedClose > 0) { end--; continue; }
+      // depth < 0 means more closers than openers — trailing one is unmatched
+      if (depth < 0) { end--; continue; }
       break;
     }
     if (":!?".includes(ch)) { end--; continue; }
@@ -102,48 +75,29 @@ function extractBalancedPath(raw: string): string {
   return raw.slice(0, end);
 }
 
-/** Result from extracting a single @file reference. */
-interface FileRef {
-  path: string;
-  index: number;
-}
-
 /**
  * Extract @file references from a prompt using the two-phase approach.
  * Returns only tokens whose path contains at least one `/` or `.` — this
  * rejects bare @mentions (e.g. @alice) and most email-like patterns.
  */
-function extractFileRefs(text: string): FileRef[] {
-  const refs: FileRef[] = [];
+function extractFileRefs(text: string): string[] {
+  const paths: string[] = [];
   // Reset lastIndex for global regex
   GREEDY_AT_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = GREEDY_AT_RE.exec(text)) !== null) {
     const balanced = extractBalancedPath(match[1]);
     if (/[/.]/.test(balanced)) {
-      refs.push({ path: balanced, index: match.index });
+      paths.push(balanced);
     }
   }
-  return refs;
+  return paths;
 }
 
 /** Count the number of @file tokens in a prompt. */
 function countFileRefs(prompt: string): number {
   return extractFileRefs(prompt).length;
 }
-
-/**
- * Expand 2+ @file tokens in a prompt by reading the files and appending a
- * REFERENCE block. Single @file tokens are left untouched so the CLI handles
- * them natively (workspace boundary enforcement, etc.).
- *
- * The original @token text is preserved in the prompt; file contents are
- * appended in a `[REFERENCE_CONTENT_START] ... [REFERENCE_CONTENT_END]` block
- * and are NOT inlined at the token position.
- *
- * Throws if any referenced file is not found, is a directory, or resolves
- * (following symlinks) to a path outside `cwd`.
- */
 
 /**
  * Escape `[]` in path segments that are not glob wildcards, so that literal
@@ -160,9 +114,21 @@ function escapeGlobSegments(rawPath: string): string {
     .join("/");
 }
 
+/**
+ * Expand 2+ @file tokens in a prompt by reading the files and appending a
+ * REFERENCE block. Single @file tokens are left untouched so the CLI handles
+ * them natively (workspace boundary enforcement, etc.).
+ *
+ * The original @token text is preserved in the prompt; file contents are
+ * appended in a `[REFERENCE_CONTENT_START] ... [REFERENCE_CONTENT_END]` block
+ * and are NOT inlined at the token position.
+ *
+ * Throws if any referenced file is not found, is a directory, or resolves
+ * (following symlinks) to a path outside `cwd`.
+ */
 export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
-  const refs = extractFileRefs(prompt);
-  if (refs.length < 2) return prompt;
+  const filePaths = extractFileRefs(prompt);
+  if (filePaths.length < 2) return prompt;
 
   const cwdResolved = nodePath.resolve(cwd);
   let realCwd: string;
@@ -174,8 +140,7 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
 
   const sections: string[] = [];
 
-  for (const ref of refs) {
-    const rawPath = ref.path;
+  for (const rawPath of filePaths) {
 
     let filePaths: string[];
     if (/[*?{]/.test(rawPath)) {

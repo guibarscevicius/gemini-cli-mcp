@@ -666,6 +666,36 @@ describe("expandFileRefs", () => {
     }
   });
 
+  it("strips trailing unmatched ] as punctuation — regression guard", async () => {
+    const dir = await makeTmpDir({
+      "a.ts": "// file a",
+      "b.ts": "// file b",
+    });
+    try {
+      // Markdown-style brackets around @file refs
+      const result = await expandFileRefs("[see @a.ts and @b.ts]", dir);
+      expect(result).toContain("Content from @a.ts:");
+      expect(result).toContain("Content from @b.ts:");
+      expect(result).not.toContain("Content from @b.ts]:");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
+  it("strips trailing :!? punctuation from @file paths", async () => {
+    const dir = await makeTmpDir({
+      "a.ts": "// file a",
+      "b.ts": "// file b",
+    });
+    try {
+      const result = await expandFileRefs("Check @a.ts! Also @b.ts?", dir);
+      expect(result).toContain("Content from @a.ts:");
+      expect(result).toContain("Content from @b.ts:");
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
   it("strips trailing unmatched ) as punctuation — regression guard", async () => {
     const dir = await makeTmpDir({
       "a.ts": "// file a",
