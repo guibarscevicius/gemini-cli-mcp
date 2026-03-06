@@ -265,9 +265,14 @@ export async function runGemini(
         os.tmpdir(),
         `gemini-prompt-${randomUUID()}.txt`
       );
-      await writeFile(tempPromptFile, expandedPrompt, "utf8");
+      // mode 0o600: restrict to owner only — the expanded prompt can contain
+      // sensitive source code that must not be world-readable in /tmp.
+      await writeFile(tempPromptFile, expandedPrompt, { encoding: "utf8", mode: 0o600 });
       // --include-directories lets the CLI read outside the project workspace (/tmp is
       // outside any project cwd, so the workspace boundary check would otherwise reject it).
+      // This grants the CLI access to all files under os.tmpdir(), not just the prompt
+      // file. This is acceptable because expandFileRefs() has already inlined or rejected
+      // every @file reference — the CLI will not encounter further @-refs to resolve.
       args.push(
         "--include-directories",
         os.tmpdir(),
@@ -321,7 +326,11 @@ export async function runGemini(
   } finally {
     // Always clean up the temp file — even if the executor or parseGeminiOutput throws.
     if (tempPromptFile) {
-      await unlink(tempPromptFile).catch(() => {});
+      await unlink(tempPromptFile).catch((e) => {
+        process.stderr.write(
+          `[gemini-runner] warning: failed to delete temp prompt file ${tempPromptFile}: ${e}\n`
+        );
+      });
     }
   }
 }

@@ -298,6 +298,22 @@ describe("runGemini", () => {
     await expect(fs.access(tempPath)).rejects.toThrow();
   });
 
+  it("uses temp-file bypass when model is also provided — correct arg count and ordering", async () => {
+    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const largePrompt = "D".repeat(115 * 1024);
+    await runGemini(largePrompt, { model: "gemini-2.5-pro" }, exec);
+
+    const capturedArgs = vi.mocked(exec).mock.calls[0][0];
+    // --yolo --output-format json --model <model> --include-directories <tmpdir> --prompt @<file>
+    expect(capturedArgs).toHaveLength(9);
+    expect(capturedArgs).toContain("--model");
+    expect(capturedArgs).toContain("gemini-2.5-pro");
+    expect(capturedArgs).toContain("--include-directories");
+    expect(capturedArgs[capturedArgs.indexOf("--prompt") + 1]).toMatch(
+      /^@.+gemini-prompt-.+\.txt$/
+    );
+  });
+
   it("cleans up temp file even when the executor throws", async () => {
     const exec = vi.fn().mockRejectedValue(
       Object.assign(new Error("subprocess failed"), { code: "EACCES", stderr: "denied" })
