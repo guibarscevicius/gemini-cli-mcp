@@ -17,7 +17,7 @@ export interface GeminiOptions {
 /** Injectable executor type — override in tests to avoid spawning a real subprocess. */
 export type GeminiExecutor = (
   args: string[],
-  opts: { env: Record<string, string>; cwd?: string; timeout: number; maxBuffer: number }
+  opts: { env: Record<string, string>; cwd?: string; timeout: number; maxBuffer: number; input: string }
 ) => Promise<{ stdout: string }>;
 
 const defaultExecutor: GeminiExecutor = (args, opts) =>
@@ -264,6 +264,11 @@ export async function runGemini(
       cwd: opts.cwd,
       timeout: TIMEOUT_MS,
       maxBuffer: 10 * 1024 * 1024, // 10 MB — generous for large responses
+      // The Gemini CLI v0.32+ reads all stdin before processing --prompt when
+      // stdin is not a TTY (execFile always creates a pipe). Passing input:''
+      // writes an empty string to stdin and immediately closes it, giving the
+      // CLI an instant EOF so it doesn't block waiting for input.
+      input: "",
     });
     stdout = result.stdout;
   } catch (err: unknown) {
