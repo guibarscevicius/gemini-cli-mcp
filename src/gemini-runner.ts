@@ -1,13 +1,20 @@
 import { execFile } from "node:child_process";
-import { readFile, realpath } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import * as os from "node:os";
 import * as nodePath from "node:path";
 import { promisify } from "node:util";
 import { escape as escapeGlob, glob } from "glob";
 
 const execFileAsync = promisify(execFile);
 
-// 60 s - generous for large file analysis; increase if prompts regularly time out
-const TIMEOUT_MS = 60_000;
+// 300 s - allows Gemini 2.5 Pro deep-reasoning tasks (can take 2–3 min before first token)
+const TIMEOUT_MS = 300_000;
+
+// Linux MAX_ARG_STRLEN = PAGE_SIZE × 32 = 131,072 bytes (~128 KB) caps any single exec arg.
+// Prompts larger than this threshold are written to a temp file and referenced via @path
+// so the CLI reads from disk, completely bypassing the per-argument kernel limit.
+const LARGE_PROMPT_THRESHOLD = 110 * 1024; // 110 KB — 15% below the ~127 KB measured ceiling
 
 export interface GeminiOptions {
   model?: string;
@@ -242,54 +249,81 @@ export async function runGemini(
     "--yolo",
     "--output-format",
     "json",
-    "--prompt",
-    expandedPrompt,
   ];
 
   if (opts.model) {
     args.push("--model", opts.model);
   }
 
-  let stdout: string;
+  // Large-prompt bypass: Linux MAX_ARG_STRLEN (~128 KB) caps any single exec argument.
+  // Prompts above the threshold are written to a temp file and passed as @<path> so the
+  // CLI reads from disk — completely bypasses the per-argument kernel limit.
+  let tempPromptFile: string | null = null;
   try {
-    const result = await executor(args, {
-      // Restrict inherited environment to only what Gemini CLI needs for auth
-      env: {
-        HOME: homeDir,
-        PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-      },
-      // Sets subprocess working directory. For single @file prompts the CLI resolves
-      // the path relative to this; for 2+ @file prompts expandFileRefs() has already
-      // inlined the content above, so the CLI no longer needs to resolve @file itself.
-      cwd: opts.cwd,
-      timeout: TIMEOUT_MS,
-      maxBuffer: 10 * 1024 * 1024, // 10 MB — generous for large responses
-      // The Gemini CLI v0.32+ reads all stdin before processing --prompt when
-      // stdin is not a TTY (execFile always creates a pipe). Passing input:''
-      // writes an empty string to stdin and immediately closes it, giving the
-      // CLI an instant EOF so it doesn't block waiting for input.
-      input: "",
-    });
-    stdout = result.stdout;
-  } catch (err: unknown) {
-    // execFile throws on non-zero exit; include stderr in message if available
-    const execErr = err as { code?: string; stderr?: string; message?: string };
-    const detail = execErr.stderr?.trim() || execErr.message || String(err);
-    if (execErr.code === "ENOENT") {
-      throw new Error(
-        "gemini binary not found. Is the Gemini CLI installed and on PATH?",
-        { cause: err }
+    if (expandedPrompt.length > LARGE_PROMPT_THRESHOLD) {
+      tempPromptFile = nodePath.join(
+        os.tmpdir(),
+        `gemini-prompt-${randomUUID()}.txt`
       );
+      await writeFile(tempPromptFile, expandedPrompt, "utf8");
+      // --include-directories lets the CLI read outside the project workspace (/tmp is
+      // outside any project cwd, so the workspace boundary check would otherwise reject it).
+      args.push(
+        "--include-directories",
+        os.tmpdir(),
+        "--prompt",
+        `@${tempPromptFile}`
+      );
+    } else {
+      args.push("--prompt", expandedPrompt);
     }
-    // Gemini CLI emits "Path not in workspace" for workspace boundary violations.
-    // If this hint stops appearing, check whether the CLI error wording has changed.
-    const workspaceHint = detail.includes("Path not in workspace")
-      ? " — pass cwd pointing to the project root containing your @file targets"
-      : "";
-    throw new Error(`gemini process failed: ${detail}${workspaceHint}`, { cause: err });
-  }
 
-  return parseGeminiOutput(stdout);
+    let stdout: string;
+    try {
+      const result = await executor(args, {
+        // Restrict inherited environment to only what Gemini CLI needs for auth
+        env: {
+          HOME: homeDir,
+          PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+        },
+        // Sets subprocess working directory. For single @file prompts the CLI resolves
+        // the path relative to this; for 2+ @file prompts expandFileRefs() has already
+        // inlined the content above, so the CLI no longer needs to resolve @file itself.
+        cwd: opts.cwd,
+        timeout: TIMEOUT_MS,
+        maxBuffer: 100 * 1024 * 1024, // 100 MB — large code-analysis responses can exceed 10 MB
+        // The Gemini CLI v0.32+ reads all stdin before processing --prompt when
+        // stdin is not a TTY (execFile always creates a pipe). Passing input:''
+        // writes an empty string to stdin and immediately closes it, giving the
+        // CLI an instant EOF so it doesn't block waiting for input.
+        input: "",
+      });
+      stdout = result.stdout;
+    } catch (err: unknown) {
+      // execFile throws on non-zero exit; include stderr in message if available
+      const execErr = err as { code?: string; stderr?: string; message?: string };
+      const detail = execErr.stderr?.trim() || execErr.message || String(err);
+      if (execErr.code === "ENOENT") {
+        throw new Error(
+          "gemini binary not found. Is the Gemini CLI installed and on PATH?",
+          { cause: err }
+        );
+      }
+      // Gemini CLI emits "Path not in workspace" for workspace boundary violations.
+      // If this hint stops appearing, check whether the CLI error wording has changed.
+      const workspaceHint = detail.includes("Path not in workspace")
+        ? " — pass cwd pointing to the project root containing your @file targets"
+        : "";
+      throw new Error(`gemini process failed: ${detail}${workspaceHint}`, { cause: err });
+    }
+
+    return parseGeminiOutput(stdout);
+  } finally {
+    // Always clean up the temp file — even if the executor or parseGeminiOutput throws.
+    if (tempPromptFile) {
+      await unlink(tempPromptFile).catch(() => {});
+    }
+  }
 }
 
 export interface GeminiJsonOutput {
