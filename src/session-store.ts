@@ -16,6 +16,8 @@ interface Turn {
 export class SessionStore {
   private db: DatabaseSync;
   private gcTimer: ReturnType<typeof setInterval>;
+  /** Maps sessionId → jobId for in-flight async jobs. */
+  private pendingJobs = new Map<string, string>();
 
   constructor(ttlMs = SESSION_TTL_MS, gcIntervalMs = GC_INTERVAL_MS, dbPath?: string) {
     const resolvedPath =
@@ -92,6 +94,18 @@ export class SessionStore {
     }
     lines.push("[End of history — continue the conversation]");
     return lines.join("\n");
+  }
+
+  setPendingJob(sessionId: string, jobId: string): void {
+    this.pendingJobs.set(sessionId, jobId);
+  }
+
+  clearPendingJob(sessionId: string): void {
+    this.pendingJobs.delete(sessionId);
+  }
+
+  getPendingJob(sessionId: string): string | undefined {
+    return this.pendingJobs.get(sessionId);
   }
 
   destroy(): void {

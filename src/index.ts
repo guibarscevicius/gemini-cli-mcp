@@ -10,18 +10,30 @@ import {
 
 import { askGeminiToolDefinition } from "./tools/ask-gemini.js";
 import { geminiReplyToolDefinition } from "./tools/gemini-reply.js";
+import { geminiPollToolDefinition } from "./tools/gemini-poll.js";
+import { geminiCancelToolDefinition } from "./tools/gemini-cancel.js";
 import { handleCallTool } from "./dispatcher.js";
 
 type ToolServer = Pick<Server, "setRequestHandler">;
 
 export function registerToolHandlers(server: ToolServer): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [askGeminiToolDefinition, geminiReplyToolDefinition],
+    tools: [
+      askGeminiToolDefinition,
+      geminiReplyToolDefinition,
+      geminiPollToolDefinition,
+      geminiCancelToolDefinition,
+    ],
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args } = request.params;
-    return handleCallTool(name, args);
+    const progressToken = request.params._meta?.progressToken;
+    const ctx = {
+      sendNotification: extra?.sendNotification as ((n: unknown) => Promise<void>) | undefined,
+      progressToken,
+    };
+    return handleCallTool(name, args, ctx);
   });
 }
 

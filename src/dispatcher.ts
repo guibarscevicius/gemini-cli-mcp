@@ -9,6 +9,13 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 import { askGemini } from "./tools/ask-gemini.js";
 import { geminiReply } from "./tools/gemini-reply.js";
+import { geminiPoll } from "./tools/gemini-poll.js";
+import { geminiCancel } from "./tools/gemini-cancel.js";
+
+export interface ToolCallContext {
+  sendNotification?: (n: unknown) => Promise<void>;
+  progressToken?: string | number;
+}
 
 export type ToolResponse = {
   content: Array<{ type: "text"; text: string }>;
@@ -26,17 +33,28 @@ export type ToolResponse = {
  */
 export async function handleCallTool(
   name: string,
-  args: unknown
+  args: unknown,
+  ctx: ToolCallContext = {}
 ): Promise<ToolResponse> {
   try {
     switch (name) {
       case "ask-gemini": {
-        const result = await askGemini(args);
+        const result = await askGemini(args, ctx);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
       case "gemini-reply": {
-        const result = await geminiReply(args);
+        const result = await geminiReply(args, ctx);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gemini-poll": {
+        const result = await geminiPoll(args);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gemini-cancel": {
+        const result = await geminiCancel(args);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 

@@ -6,7 +6,9 @@ import {
   runGemini,
   parseGeminiOutput,
   expandFileRefs,
+  spawnGemini,
   clearCache,
+  GeminiOutputError,
   type GeminiExecutor,
 } from "../src/gemini-runner.js";
 
@@ -140,9 +142,13 @@ describe("parseGeminiOutput", () => {
 
 // ── runGemini (uses injectable executor — no real subprocess) ────────────────
 
-/** Helper: create a mock executor that resolves with given stdout */
-function makeExecutor(stdout: string): GeminiExecutor {
-  return vi.fn().mockResolvedValue({ stdout });
+/**
+ * Helper: create a mock executor that resolves with given text.
+ * With the spawn-based executor, `stdout` is the accumulated response text
+ * (already parsed from stream-json NDJSON), not raw JSON.
+ */
+function makeExecutor(text: string): GeminiExecutor {
+  return vi.fn().mockResolvedValue({ stdout: text });
 }
 
 /** Helper: create a mock executor that rejects */
@@ -152,7 +158,9 @@ function makeErrorExecutor(
   return vi.fn().mockRejectedValue(err);
 }
 
-type RunnerModule = typeof import("../src/gemini-runner.js");
+type RunnerModule = typeof import("../src/gemini-runner.js") & {
+  GeminiOutputError: typeof import("../src/gemini-runner.js").GeminiOutputError;
+};
 
 const RELIABILITY_ENV_KEYS = [
   "GEMINI_MAX_RETRIES",
@@ -197,29 +205,29 @@ afterEach(() => {
 });
 
 describe("runGemini", () => {
-  it("resolves with parsed response text on success", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "The capital is Paris." }));
+  it("resolves with response text returned by executor", async () => {
+    const exec = makeExecutor("The capital is Paris.");
     const result = await runGemini("What is the capital of France?", {}, exec);
     expect(result).toBe("The capital is Paris.");
   });
 
   // ── Args construction ──────────────────────────────────────────────────────
 
-  it("always passes --yolo, --output-format json, and --prompt flags", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+  it("always passes --yolo, --output-format stream-json, and --prompt flags", async () => {
+    const exec = makeExecutor("ok");
     await runGemini("my prompt", {}, exec);
 
     const capturedArgs = vi.mocked(exec).mock.calls[0][0];
     expect(capturedArgs).toContain("--yolo");
     expect(capturedArgs).toContain("--output-format");
-    expect(capturedArgs).toContain("json");
+    expect(capturedArgs).toContain("stream-json");
     expect(capturedArgs).toContain("--prompt");
     expect(capturedArgs).toContain("my prompt");
   });
 
   it("prompt is passed as a single array element (not split on spaces)", async () => {
     const prompt = "summarize; rm -rf /; echo pwned";
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     await runGemini(prompt, {}, exec);
 
     const args = vi.mocked(exec).mock.calls[0][0];
@@ -227,11 +235,11 @@ describe("runGemini", () => {
     // The whole prompt string is the element immediately after --prompt
     expect(args[promptIndex + 1]).toBe(prompt);
     // It is NOT split into multiple elements
-    expect(args).toHaveLength(5); // --yolo --output-format json --prompt <prompt>
+    expect(args).toHaveLength(5); // --yolo --output-format stream-json --prompt <prompt>
   });
 
   it("appends --model flag when model option is provided", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     await runGemini("hello", { model: "gemini-2.5-pro" }, exec);
 
     const args = vi.mocked(exec).mock.calls[0][0];
@@ -241,7 +249,7 @@ describe("runGemini", () => {
   });
 
   it("does NOT append --model flag when model is not provided", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     await runGemini("hello", {}, exec);
 
     const args = vi.mocked(exec).mock.calls[0][0];
@@ -251,7 +259,7 @@ describe("runGemini", () => {
   // ── Environment isolation ──────────────────────────────────────────────────
 
   it("passes only HOME and PATH in env (no other vars)", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     await runGemini("hello", {}, exec);
 
     const capturedOpts = vi.mocked(exec).mock.calls[0][1];
@@ -264,7 +272,7 @@ describe("runGemini", () => {
     delete process.env.PATH;
 
     try {
-      const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+      const exec = makeExecutor("ok");
       await runGemini("hello", {}, exec);
 
       const capturedOpts = vi.mocked(exec).mock.calls[0][1];
@@ -279,7 +287,7 @@ describe("runGemini", () => {
   });
 
   it("passes cwd option through to executor", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     await runGemini("hello", { cwd: "/some/project" }, exec);
 
     const capturedOpts = vi.mocked(exec).mock.calls[0][1];
@@ -287,7 +295,7 @@ describe("runGemini", () => {
   });
 
   it("cwd is undefined when not specified", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     await runGemini("hello", {}, exec);
 
     const capturedOpts = vi.mocked(exec).mock.calls[0][1];
@@ -295,7 +303,7 @@ describe("runGemini", () => {
   });
 
   it("passes 300-second timeout to executor", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     await runGemini("hello", {}, exec);
 
     const capturedOpts = vi.mocked(exec).mock.calls[0][1];
@@ -303,7 +311,7 @@ describe("runGemini", () => {
   });
 
   it("passes 100 MB maxBuffer to executor", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     await runGemini("hello", {}, exec);
 
     const capturedOpts = vi.mocked(exec).mock.calls[0][1];
@@ -311,7 +319,7 @@ describe("runGemini", () => {
   });
 
   it("passes prompt inline when it fits below LARGE_PROMPT_THRESHOLD", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     const smallPrompt = "A".repeat(100); // well below 110 KB threshold
     await runGemini(smallPrompt, {}, exec);
 
@@ -323,7 +331,7 @@ describe("runGemini", () => {
   });
 
   it("uses temp-file bypass for large prompts and cleans up afterward", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     // Construct a prompt larger than LARGE_PROMPT_THRESHOLD (110 KB)
     const largePrompt = "B".repeat(115 * 1024);
     await runGemini(largePrompt, {}, exec);
@@ -344,12 +352,12 @@ describe("runGemini", () => {
   });
 
   it("uses temp-file bypass when model is also provided — correct arg count and ordering", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     const largePrompt = "D".repeat(115 * 1024);
     await runGemini(largePrompt, { model: "gemini-2.5-pro" }, exec);
 
     const capturedArgs = vi.mocked(exec).mock.calls[0][0];
-    // --yolo --output-format json --model <model> --include-directories <tmpdir> --prompt @<file>
+    // --yolo --output-format stream-json --model <model> --include-directories <tmpdir> --prompt @<file>
     expect(capturedArgs).toHaveLength(9);
     expect(capturedArgs).toContain("--model");
     expect(capturedArgs).toContain("gemini-2.5-pro");
@@ -365,7 +373,7 @@ describe("runGemini", () => {
     ) as unknown as GeminiExecutor;
     const largePrompt = "C".repeat(115 * 1024);
 
-    await expect(runGemini(largePrompt, {}, exec)).rejects.toThrow("gemini process failed");
+    await expect(runGemini(largePrompt, {}, exec)).rejects.toThrow();
 
     const capturedArgs = vi.mocked(exec).mock.calls[0][0];
     const promptArg = capturedArgs[capturedArgs.indexOf("--prompt") + 1];
@@ -378,7 +386,7 @@ describe("runGemini", () => {
     delete process.env.HOME;
 
     try {
-      const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+      const exec = makeExecutor("ok");
       await expect(runGemini("hello", {}, exec)).rejects.toThrow(
         "HOME environment variable is not set"
       );
@@ -470,44 +478,53 @@ describe("runGemini", () => {
     }
   });
 
-  it("propagates JSON parse errors from parseGeminiOutput", async () => {
-    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+  it("propagates GeminiOutputError thrown by executor (retryable, exhausts retries)", async () => {
+    const { runGemini: freshRunGemini, GeminiOutputError: FreshErr } = await loadRunnerWithEnv({
       GEMINI_MAX_RETRIES: "0",
+      GEMINI_RETRY_BASE_MS: "0",
     });
-    const exec = makeExecutor("this is not json");
-    await expect(freshRunGemini("hello", {}, exec)).rejects.toThrow(
-      "gemini returned non-JSON output"
-    );
-  });
-
-  it("propagates gemini error field from parseGeminiOutput", async () => {
-    const exec = makeExecutor(JSON.stringify({ error: "quota exceeded" }));
-    await expect(runGemini("hello", {}, exec)).rejects.toThrow(
-      "gemini error: quota exceeded"
-    );
+    const exec = vi.fn().mockRejectedValue(
+      new FreshErr("parse error from executor", "parse error from executor")
+    ) as unknown as GeminiExecutor;
+    await expect(freshRunGemini("hello", {}, exec)).rejects.toThrow("parse error from executor");
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it("throws when 2+ @file tokens are present and cwd is not provided", async () => {
-    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const exec = makeExecutor("ok");
     await expect(
       runGemini("Read @src/a.ts and @src/b.ts", {}, exec)
     ).rejects.toThrow("Multiple @file tokens require the cwd option");
     expect(exec).not.toHaveBeenCalled();
   });
+
+  it("passes onChunk callback to executor as third argument", async () => {
+    const chunks: string[] = [];
+    const onChunk = (c: string) => chunks.push(c);
+    const exec = vi.fn().mockImplementation(async (_args, _opts, cb) => {
+      cb?.("chunk-1");
+      cb?.("chunk-2");
+      return { stdout: "chunk-1chunk-2" };
+    }) as unknown as GeminiExecutor;
+
+    const result = await runGemini("hello", {}, exec, onChunk);
+    expect(result).toBe("chunk-1chunk-2");
+    expect(chunks).toEqual(["chunk-1", "chunk-2"]);
+  });
 });
 
 describe("runGemini retries", () => {
-  it("retries retryable non-JSON failures and succeeds on a later attempt", async () => {
+  it("retries GeminiOutputError failures and succeeds on a later attempt", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
-    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+    const { runGemini: freshRunGemini, GeminiOutputError: FreshErr } = await loadRunnerWithEnv({
       GEMINI_MAX_RETRIES: "3",
       GEMINI_RETRY_BASE_MS: "0",
     });
     const exec = vi
       .fn()
-      .mockResolvedValueOnce({ stdout: "not json 1" })
-      .mockResolvedValueOnce({ stdout: "not json 2" })
-      .mockResolvedValueOnce({ stdout: JSON.stringify({ response: "ok after retries" }) });
+      .mockRejectedValueOnce(new FreshErr("parse fail 1", "parse fail 1"))
+      .mockRejectedValueOnce(new FreshErr("parse fail 2", "parse fail 2"))
+      .mockResolvedValueOnce({ stdout: "ok after retries" });
 
     const result = await freshRunGemini("hello", {}, exec as unknown as GeminiExecutor);
     expect(result).toBe("ok after retries");
@@ -530,14 +547,17 @@ describe("runGemini retries", () => {
   });
 
   it("attempts only once when GEMINI_MAX_RETRIES=0", async () => {
-    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+    const { runGemini: freshRunGemini, GeminiOutputError: FreshErr } = await loadRunnerWithEnv({
       GEMINI_MAX_RETRIES: "0",
       GEMINI_RETRY_BASE_MS: "0",
     });
-    const exec = vi.fn().mockResolvedValue({ stdout: "not json once" });
+    // Executor rejects with GeminiOutputError (retryable) but retries=0 → only 1 attempt
+    const exec = vi.fn().mockRejectedValue(
+      new FreshErr("parse error", "parse error")
+    );
 
     await expect(freshRunGemini("hello", {}, exec as unknown as GeminiExecutor)).rejects.toThrow(
-      "gemini returned non-JSON output"
+      "parse error"
     );
     expect(exec).toHaveBeenCalledTimes(1);
   });
@@ -563,10 +583,10 @@ describe("runGemini concurrency", () => {
       if (current === 1) {
         await firstGate;
         order.push("end-1");
-        return { stdout: JSON.stringify({ response: "first" }) };
+        return { stdout: "first" };
       }
       order.push(`end-${current}`);
-      return { stdout: JSON.stringify({ response: "second" }) };
+      return { stdout: "second" };
     }) as unknown as GeminiExecutor;
 
     const first = freshRunGemini("prompt one", {}, exec);
@@ -599,7 +619,7 @@ describe("runGemini telemetry", () => {
       GEMINI_MAX_RETRIES: "0",
     });
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const exec = vi.fn().mockResolvedValue({ stdout: JSON.stringify({ response: "ok" }) });
+    const exec = vi.fn().mockResolvedValue({ stdout: "ok" });
 
     await freshRunGemini("hello", { tool: "ask-gemini" }, exec as unknown as GeminiExecutor);
 
@@ -620,7 +640,9 @@ describe("runGemini telemetry", () => {
       GEMINI_MAX_RETRIES: "0",
     });
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const exec = vi.fn().mockRejectedValue(new Error("fatal failure"));
+    const exec = vi.fn().mockRejectedValue(
+      Object.assign(new Error("fatal failure"), { stderr: "fatal failure" })
+    );
 
     await expect(
       freshRunGemini("hello", { tool: "gemini-reply", sessionId: "abc" }, exec as unknown as GeminiExecutor)
@@ -638,18 +660,21 @@ describe("runGemini telemetry", () => {
   });
 
 
-  it("telemetry error field uses sanitized message, not raw Gemini output", async () => {
-    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
-      GEMINI_STRUCTURED_LOGS: "1",
-      GEMINI_MAX_RETRIES: "0",
-    });
+  it("telemetry error field uses sanitized message from GeminiOutputError", async () => {
+    const { runGemini: freshRunGemini, GeminiOutputError: FreshGeminiOutputError } =
+      await loadRunnerWithEnv({
+        GEMINI_STRUCTURED_LOGS: "1",
+        GEMINI_MAX_RETRIES: "0",
+      });
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const rawOutput = "RAWRAWRAW".repeat(50); // 450 chars — would appear in telemetry if unsanitized
-    const exec = vi.fn().mockResolvedValue({ stdout: rawOutput });
+    const rawOutput = "RAWRAWRAW".repeat(50); // 450 chars of raw data
+    const exec = vi.fn().mockRejectedValue(
+      new FreshGeminiOutputError(rawOutput, "gemini output parse error")
+    );
 
     await expect(
       freshRunGemini("hello", {}, exec as unknown as GeminiExecutor)
-    ).rejects.toThrow("gemini returned non-JSON output");
+    ).rejects.toThrow();
 
     const logLine = stderrSpy.mock.calls
       .map(([line]) => String(line))
@@ -658,7 +683,7 @@ describe("runGemini telemetry", () => {
     const payload = JSON.parse(logLine as string) as Record<string, unknown>;
 
     expect(payload.status).toBe("error");
-    expect(payload.error).toBe("gemini returned non-JSON output"); // sanitized message
+    expect(payload.error).toBe("gemini output parse error"); // sanitized message, not raw
     expect(String(payload.error)).not.toContain("RAWRAWRAW"); // raw output excluded
   });
 });
@@ -1047,7 +1072,7 @@ describe("runGemini — @file integration", () => {
   it("passes a single-@file prompt to the executor unchanged when cwd is set", async () => {
     const dir = await makeTmpDir({ "a.ts": "const a = 1;" });
     try {
-      const exec = vi.fn().mockResolvedValue({ stdout: JSON.stringify({ response: "ok" }) });
+      const exec = vi.fn().mockResolvedValue({ stdout: "ok" });
       await runGemini("Review @a.ts", { cwd: dir }, exec);
 
       const args = vi.mocked(exec).mock.calls[0][0];
@@ -1063,7 +1088,7 @@ describe("runGemini — @file integration", () => {
   it("passes expanded REFERENCE block to executor when cwd is set and 2+ @file tokens present", async () => {
     const dir = await makeTmpDir({ "a.ts": "const a = 1;", "b.ts": "const b = 2;" });
     try {
-      const exec = vi.fn().mockResolvedValue({ stdout: JSON.stringify({ response: "ok" }) });
+      const exec = vi.fn().mockResolvedValue({ stdout: "ok" });
       await runGemini("Compare @a.ts and @b.ts", { cwd: dir }, exec);
 
       const args = vi.mocked(exec).mock.calls[0][0];
@@ -1085,9 +1110,7 @@ describe("runGemini cache", () => {
       GEMINI_CACHE_TTL_MS: "60000",
       GEMINI_CACHE_MAX_ENTRIES: "50",
     });
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({ response: "cached result" }),
-    });
+    const exec = vi.fn().mockResolvedValue({ stdout: "cached result" });
     const result1 = await run("What is 2+2?", {}, exec);
     const result2 = await run("What is 2+2?", {}, exec);
     expect(result1).toBe("cached result");
@@ -1100,9 +1123,7 @@ describe("runGemini cache", () => {
       GEMINI_CACHE_TTL_MS: "0",
       GEMINI_CACHE_MAX_ENTRIES: "50",
     });
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({ response: "fresh result" }),
-    });
+    const exec = vi.fn().mockResolvedValue({ stdout: "fresh result" });
     await run("What is 2+2?", {}, exec);
     await run("What is 2+2?", {}, exec);
     expect(exec).toHaveBeenCalledTimes(2);
@@ -1115,9 +1136,7 @@ describe("runGemini cache", () => {
         GEMINI_CACHE_TTL_MS: "1000",
         GEMINI_CACHE_MAX_ENTRIES: "50",
       });
-      const exec = vi.fn().mockResolvedValue({
-        stdout: JSON.stringify({ response: "fresh" }),
-      });
+      const exec = vi.fn().mockResolvedValue({ stdout: "fresh" });
       await run("hello", {}, exec);
       expect(exec).toHaveBeenCalledTimes(1);
 
@@ -1136,9 +1155,7 @@ describe("runGemini cache", () => {
       GEMINI_CACHE_TTL_MS: "60000",
       GEMINI_CACHE_MAX_ENTRIES: "50",
     });
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({ response: "session result" }),
-    });
+    const exec = vi.fn().mockResolvedValue({ stdout: "session result" });
     await run("hello", { sessionId: "sess-1" }, exec);
     await run("hello", { sessionId: "sess-1" }, exec);
     expect(exec).toHaveBeenCalledTimes(2);
@@ -1152,7 +1169,7 @@ describe("runGemini cache", () => {
     let callCount = 0;
     const exec = vi.fn().mockImplementation(async () => {
       callCount++;
-      return { stdout: JSON.stringify({ response: `result-${callCount}` }) };
+      return { stdout: `result-${callCount}` };
     });
 
     // Fill cache to max: [A, B]
@@ -1179,11 +1196,20 @@ describe("runGemini cache", () => {
       GEMINI_CACHE_TTL_MS: "60000",
       GEMINI_CACHE_MAX_ENTRIES: "50",
     });
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({ response: "ok" }),
-    });
+    const exec = vi.fn().mockResolvedValue({ stdout: "ok" });
     await run("What is 1+1?", { model: "gemini-pro" }, exec);
     await run("What is 1+1?", { model: "gemini-flash" }, exec);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("different cwd option produces a different cache key — both calls execute", async () => {
+    const { runGemini: run } = await loadRunnerWithEnv({
+      GEMINI_CACHE_TTL_MS: "60000",
+      GEMINI_CACHE_MAX_ENTRIES: "50",
+    });
+    const exec = vi.fn().mockResolvedValue({ stdout: "ok" });
+    await run("What is 1+1?", { cwd: "/project/a" }, exec);
+    await run("What is 1+1?", { cwd: "/project/b" }, exec);
     expect(exec).toHaveBeenCalledTimes(2);
   });
 
@@ -1191,5 +1217,208 @@ describe("runGemini cache", () => {
     await expect(
       loadRunnerWithEnv({ GEMINI_CACHE_MAX_ENTRIES: "0", GEMINI_CACHE_TTL_MS: "60000" })
     ).rejects.toThrow("GEMINI_CACHE_MAX_ENTRIES must be a positive integer");
+  });
+});
+
+// ── spawnGemini (NDJSON stream-json parsing) ─────────────────────────────────
+
+import { EventEmitter } from "node:events";
+
+/**
+ * Build a fake ChildProcess-like EventEmitter with controllable stdout/stderr
+ * streams that spawnGemini can attach to.
+ */
+function makeFakeProcess() {
+  const proc = new EventEmitter() as NodeJS.EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    stdin: { end: () => void };
+    kill: ReturnType<typeof vi.fn>;
+  };
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { end: vi.fn() };
+  proc.kill = vi.fn();
+  return proc;
+}
+
+describe("spawnGemini — NDJSON parsing", () => {
+  it("accumulates message events and resolves on result:success", async () => {
+    const chunks: string[] = [];
+    const result = await new Promise<string>((resolve, reject) => {
+      const cp = spawnGemini(
+        ["--yolo", "--output-format", "stream-json", "--prompt", "hi"],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        (chunk) => chunks.push(chunk),
+        resolve,
+        reject
+      );
+
+      // Feed NDJSON events via stdout
+      const lines = [
+        JSON.stringify({ type: "init", session_id: "s1", model: "gemini-flash" }),
+        JSON.stringify({ type: "message", role: "assistant", content: "Hello ", delta: true }),
+        JSON.stringify({ type: "message", role: "assistant", content: "world", delta: true }),
+        JSON.stringify({ type: "result", status: "success" }),
+      ].join("\n") + "\n";
+
+      (cp as unknown as { stdout: EventEmitter }).stdout.emit("data", Buffer.from(lines));
+      (cp as unknown as EventEmitter).emit("close", 0);
+    });
+
+    expect(result).toBe("Hello world");
+    expect(chunks).toEqual(["Hello ", "world"]);
+  });
+
+  it("handles chunked data split across multiple 'data' events", async () => {
+    const result = await new Promise<string>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        resolve,
+        reject
+      );
+
+      const full = JSON.stringify({ type: "message", role: "assistant", content: "chunk" });
+      const resultLine = JSON.stringify({ type: "result", status: "success" });
+
+      // Split the line artificially across two data events
+      const stdout = (cp as unknown as { stdout: EventEmitter }).stdout;
+      stdout.emit("data", Buffer.from(full.slice(0, 10)));
+      stdout.emit("data", Buffer.from(full.slice(10) + "\n" + resultLine + "\n"));
+      (cp as unknown as EventEmitter).emit("close", 0);
+    });
+
+    expect(result).toBe("chunk");
+  });
+
+  it("rejects with GeminiOutputError on result:error event", async () => {
+    const err = await new Promise<Error>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        () => reject(new Error("should not resolve")),
+        resolve
+      );
+
+      const lines = [
+        JSON.stringify({ type: "result", status: "error", error: "quota exceeded" }),
+      ].join("\n") + "\n";
+
+      (cp as unknown as { stdout: EventEmitter }).stdout.emit("data", Buffer.from(lines));
+      (cp as unknown as EventEmitter).emit("close", 1);
+    });
+
+    expect(err).toBeInstanceOf(GeminiOutputError);
+    expect(err.message).toContain("quota exceeded");
+  });
+
+  it("rejects with GeminiOutputError on error event in stream", async () => {
+    const err = await new Promise<Error>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        () => reject(new Error("should not resolve")),
+        resolve
+      );
+
+      const lines = [
+        JSON.stringify({ type: "error", severity: "fatal", message: "stream error occurred" }),
+      ].join("\n") + "\n";
+
+      (cp as unknown as { stdout: EventEmitter }).stdout.emit("data", Buffer.from(lines));
+      (cp as unknown as EventEmitter).emit("close", 1);
+    });
+
+    expect(err).toBeInstanceOf(GeminiOutputError);
+    expect(err.message).toContain("stream error occurred");
+  });
+
+  it("rejects with 'gemini binary not found' on ENOENT process error", async () => {
+    const err = await new Promise<Error>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        () => reject(new Error("should not resolve")),
+        resolve
+      );
+
+      (cp as unknown as EventEmitter).emit(
+        "error",
+        Object.assign(new Error("spawn gemini ENOENT"), { code: "ENOENT" })
+      );
+    });
+
+    expect(err.message).toContain("gemini binary not found");
+  });
+
+  it("rejects with GeminiOutputError on non-zero exit code without result event", async () => {
+    const err = await new Promise<Error>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        () => reject(new Error("should not resolve")),
+        resolve
+      );
+
+      // No stdout data — process just exits non-zero
+      (cp as unknown as EventEmitter).emit("close", 1);
+    });
+
+    expect(err).toBeInstanceOf(GeminiOutputError);
+    expect(err.message).toContain("exited with code 1");
+  });
+
+  it("skips non-JSON lines without throwing", async () => {
+    const result = await new Promise<string>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        resolve,
+        reject
+      );
+
+      const lines = [
+        "this is debug output, not JSON",
+        JSON.stringify({ type: "message", role: "assistant", content: "ok" }),
+        JSON.stringify({ type: "result", status: "success" }),
+      ].join("\n") + "\n";
+
+      (cp as unknown as { stdout: EventEmitter }).stdout.emit("data", Buffer.from(lines));
+      (cp as unknown as EventEmitter).emit("close", 0);
+    });
+
+    expect(result).toBe("ok");
+  });
+
+  it("only accumulates assistant messages (not user or tool messages)", async () => {
+    const chunks: string[] = [];
+    const result = await new Promise<string>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        (c) => chunks.push(c),
+        resolve,
+        reject
+      );
+
+      const lines = [
+        JSON.stringify({ type: "message", role: "user", content: "should be ignored" }),
+        JSON.stringify({ type: "message", role: "assistant", content: "actual response" }),
+        JSON.stringify({ type: "result", status: "success" }),
+      ].join("\n") + "\n";
+
+      (cp as unknown as { stdout: EventEmitter }).stdout.emit("data", Buffer.from(lines));
+      (cp as unknown as EventEmitter).emit("close", 0);
+    });
+
+    expect(result).toBe("actual response");
+    expect(chunks).toEqual(["actual response"]);
   });
 });

@@ -1,7 +1,10 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { runGemini } from "../gemini-runner.js";
+import { runGemini, spawnGemini, type GeminiExecutor } from "../gemini-runner.js";
 import { sessionStore } from "../session-store.js";
+import * as jobStore from "../job-store.js";
+import type { ToolCallContext } from "../dispatcher.js";
 
 export const GeminiReplySchema = z.object({
   sessionId: z.string().uuid().describe("Session ID returned by ask-gemini"),
@@ -23,14 +26,56 @@ export const GeminiReplySchema = z.object({
 export type GeminiReplyInput = z.infer<typeof GeminiReplySchema>;
 
 export interface GeminiReplyOutput {
-  response: string;
+  jobId: string;
+}
+
+async function runGeminiAsync(
+  jobId: string,
+  prompt: string,
+  opts: { model?: string; cwd?: string; tool: string; sessionId?: string },
+  ctx: ToolCallContext
+): Promise<string> {
+  const job = jobStore.getJob(jobId)!;
+
+  const onChunk = (chunk: string) => {
+    jobStore.appendChunk(jobId, chunk);
+    if (ctx.progressToken !== undefined && ctx.sendNotification) {
+      ctx.sendNotification({
+        method: "notifications/progress",
+        params: {
+          progressToken: ctx.progressToken,
+          progress: job.partialResponse.length,
+          total: undefined,
+        },
+      }).catch(() => {});
+    }
+  };
+
+  const executor: GeminiExecutor = (args, execOpts, chunkCb) =>
+    new Promise((resolve, reject) => {
+      const cp = spawnGemini(
+        args,
+        { env: execOpts.env, cwd: execOpts.cwd, timeout: execOpts.timeout },
+        chunkCb ?? (() => {}),
+        (fullText) => resolve({ stdout: fullText }),
+        reject
+      );
+      job.subprocess = cp;
+    });
+
+  try {
+    const response = await runGemini(prompt, opts, executor, onChunk);
+    return response;
+  } finally {
+    job.subprocess = undefined;
+  }
 }
 
 /**
  * Continue an existing Gemini session.
- * Throws McpError(InvalidParams) when the provided sessionId is unknown or expired.
+ * Throws McpError(InvalidParams) when the session is unknown, expired, or has a pending job.
  */
-export async function geminiReply(input: unknown): Promise<GeminiReplyOutput> {
+export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Promise<GeminiReplyOutput> {
   const { sessionId, prompt, model, cwd } = GeminiReplySchema.parse(input);
 
   const sessionExists = sessionStore.get(sessionId);
@@ -41,26 +86,43 @@ export async function geminiReply(input: unknown): Promise<GeminiReplyOutput> {
     );
   }
 
+  const pendingJobId = sessionStore.getPendingJob(sessionId);
+  if (pendingJobId !== undefined) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Session ${sessionId} has a pending job (${pendingJobId}). Poll with gemini-poll or cancel with gemini-cancel before sending a new message.`
+    );
+  }
+
+  const jobId = randomUUID();
+  sessionStore.setPendingJob(sessionId, jobId);
+  jobStore.createJob(jobId);
+
   // Prepend conversation history so Gemini has full context
   const history = sessionStore.formatHistory(sessionId);
   const fullPrompt = history ? `${history}\n\n${prompt}` : prompt;
 
-  const response = await runGemini(fullPrompt, {
-    model,
-    cwd,
-    tool: "gemini-reply",
-    sessionId,
-  });
-  sessionStore.appendTurn(sessionId, "user", prompt);
-  sessionStore.appendTurn(sessionId, "assistant", response);
+  // Fire-and-forget: background job
+  runGeminiAsync(jobId, fullPrompt, { model, cwd, tool: "gemini-reply", sessionId }, ctx)
+    .then((response) => {
+      jobStore.completeJob(jobId, response);
+      sessionStore.appendTurn(sessionId, "user", prompt);
+      sessionStore.appendTurn(sessionId, "assistant", response);
+      sessionStore.clearPendingJob(sessionId);
+    })
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      jobStore.failJob(jobId, message);
+      sessionStore.clearPendingJob(sessionId);
+    });
 
-  return { response };
+  return { jobId };
 }
 
 export const geminiReplyToolDefinition = {
   name: "gemini-reply" as const,
   description:
-    "Continue an existing Gemini conversation. Provide the sessionId returned by ask-gemini and a follow-up prompt. History is automatically included.",
+    "Continue an existing Gemini conversation. Returns immediately with { jobId }. Poll with gemini-poll to get the response. Throws if the session has a pending job.",
   inputSchema: {
     type: "object" as const,
     properties: {

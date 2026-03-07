@@ -30,44 +30,104 @@ vi.mock("../src/tools/gemini-reply.js", () => ({
   },
 }));
 
+vi.mock("../src/tools/gemini-poll.js", () => ({
+  geminiPoll: vi.fn(),
+  geminiPollToolDefinition: {
+    name: "gemini-poll",
+    description: "stub",
+    inputSchema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] },
+  },
+}));
+
+vi.mock("../src/tools/gemini-cancel.js", () => ({
+  geminiCancel: vi.fn(),
+  geminiCancelToolDefinition: {
+    name: "gemini-cancel",
+    description: "stub",
+    inputSchema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] },
+  },
+}));
+
 import { askGemini } from "../src/tools/ask-gemini.js";
 import { geminiReply } from "../src/tools/gemini-reply.js";
+import { geminiPoll } from "../src/tools/gemini-poll.js";
+import { geminiCancel } from "../src/tools/gemini-cancel.js";
 import { handleCallTool } from "../src/dispatcher.js";
 
 const mockAskGemini = vi.mocked(askGemini);
 const mockGeminiReply = vi.mocked(geminiReply);
+const mockGeminiPoll = vi.mocked(geminiPoll);
+const mockGeminiCancel = vi.mocked(geminiCancel);
+
+const VALID_JOB_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockAskGemini.mockResolvedValue({ sessionId: "abc-123", response: "hello" });
-  mockGeminiReply.mockResolvedValue({ response: "follow up" });
+  mockAskGemini.mockResolvedValue({ jobId: VALID_JOB_ID, sessionId: "abc-123" });
+  mockGeminiReply.mockResolvedValue({ jobId: VALID_JOB_ID });
+  mockGeminiPoll.mockResolvedValue({ status: "done", response: "the answer" });
+  mockGeminiCancel.mockResolvedValue({ cancelled: true, alreadyDone: false });
 });
 
 describe("MCP dispatcher (handleCallTool)", () => {
   // ── ask-gemini dispatch ────────────────────────────────────────────────────
 
-  it("dispatches ask-gemini and returns JSON content", async () => {
+  it("dispatches ask-gemini and returns JSON content with jobId and sessionId", async () => {
     const result = await handleCallTool("ask-gemini", { prompt: "hello" });
     expect(result.content[0].type).toBe("text");
     const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.jobId).toBe(VALID_JOB_ID);
     expect(parsed.sessionId).toBe("abc-123");
-    expect(parsed.response).toBe("hello");
+    expect(parsed.response).toBeUndefined();
   });
 
-  it("passes args through to askGemini", async () => {
-    await handleCallTool("ask-gemini", { prompt: "test", model: "gemini-2.5-pro" });
-    expect(mockAskGemini).toHaveBeenCalledWith({ prompt: "test", model: "gemini-2.5-pro" });
+  it("passes args and ctx to askGemini", async () => {
+    const ctx = { progressToken: 42 };
+    await handleCallTool("ask-gemini", { prompt: "test", model: "gemini-2.5-pro" }, ctx);
+    expect(mockAskGemini).toHaveBeenCalledWith(
+      { prompt: "test", model: "gemini-2.5-pro" },
+      ctx
+    );
   });
 
   // ── gemini-reply dispatch ──────────────────────────────────────────────────
 
-  it("dispatches gemini-reply and returns JSON content", async () => {
+  it("dispatches gemini-reply and returns JSON content with jobId", async () => {
     const result = await handleCallTool("gemini-reply", {
       sessionId: "11111111-1111-4111-8111-111111111111",
       prompt: "follow up",
     });
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.response).toBe("follow up");
+    expect(parsed.jobId).toBe(VALID_JOB_ID);
+    expect(parsed.response).toBeUndefined();
+  });
+
+  // ── gemini-poll dispatch ───────────────────────────────────────────────────
+
+  it("dispatches gemini-poll and returns JSON content", async () => {
+    const result = await handleCallTool("gemini-poll", { jobId: VALID_JOB_ID });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.status).toBe("done");
+    expect(parsed.response).toBe("the answer");
+  });
+
+  it("passes jobId to geminiPoll", async () => {
+    await handleCallTool("gemini-poll", { jobId: VALID_JOB_ID });
+    expect(mockGeminiPoll).toHaveBeenCalledWith({ jobId: VALID_JOB_ID });
+  });
+
+  // ── gemini-cancel dispatch ─────────────────────────────────────────────────
+
+  it("dispatches gemini-cancel and returns JSON content", async () => {
+    const result = await handleCallTool("gemini-cancel", { jobId: VALID_JOB_ID });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.cancelled).toBe(true);
+    expect(parsed.alreadyDone).toBe(false);
+  });
+
+  it("passes jobId to geminiCancel", async () => {
+    await handleCallTool("gemini-cancel", { jobId: VALID_JOB_ID });
+    expect(mockGeminiCancel).toHaveBeenCalledWith({ jobId: VALID_JOB_ID });
   });
 
   // ── Unknown tool ───────────────────────────────────────────────────────────
