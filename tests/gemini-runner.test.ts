@@ -6,6 +6,7 @@ import {
   runGemini,
   parseGeminiOutput,
   expandFileRefs,
+  clearCache,
   type GeminiExecutor,
 } from "../src/gemini-runner.js";
 
@@ -159,6 +160,8 @@ const RELIABILITY_ENV_KEYS = [
   "GEMINI_MAX_CONCURRENT",
   "GEMINI_QUEUE_TIMEOUT_MS",
   "GEMINI_STRUCTURED_LOGS",
+  "GEMINI_CACHE_TTL_MS",
+  "GEMINI_CACHE_MAX_ENTRIES",
 ] as const;
 
 const originalReliabilityEnv = Object.fromEntries(
@@ -182,6 +185,7 @@ async function loadRunnerWithEnv(
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearCache(); // prevent cache hits from bleeding across tests
   for (const key of RELIABILITY_ENV_KEYS) {
     const value = originalReliabilityEnv[key];
     if (value === undefined) {
@@ -1070,5 +1074,122 @@ describe("runGemini — @file integration", () => {
     } finally {
       await fs.rm(dir, { recursive: true });
     }
+  });
+});
+
+// ── runGemini cache ──────────────────────────────────────────────────────────
+
+describe("runGemini cache", () => {
+  it("caches identical calls — executor called once for two identical calls", async () => {
+    const { runGemini: run } = await loadRunnerWithEnv({
+      GEMINI_CACHE_TTL_MS: "60000",
+      GEMINI_CACHE_MAX_ENTRIES: "50",
+    });
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({ response: "cached result" }),
+    });
+    const result1 = await run("What is 2+2?", {}, exec);
+    const result2 = await run("What is 2+2?", {}, exec);
+    expect(result1).toBe("cached result");
+    expect(result2).toBe("cached result");
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("GEMINI_CACHE_TTL_MS=0 disables cache — executor called twice", async () => {
+    const { runGemini: run } = await loadRunnerWithEnv({
+      GEMINI_CACHE_TTL_MS: "0",
+      GEMINI_CACHE_MAX_ENTRIES: "50",
+    });
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({ response: "fresh result" }),
+    });
+    await run("What is 2+2?", {}, exec);
+    await run("What is 2+2?", {}, exec);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("expired entry triggers a fresh call — executor called again after TTL", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runGemini: run } = await loadRunnerWithEnv({
+        GEMINI_CACHE_TTL_MS: "1000",
+        GEMINI_CACHE_MAX_ENTRIES: "50",
+      });
+      const exec = vi.fn().mockResolvedValue({
+        stdout: JSON.stringify({ response: "fresh" }),
+      });
+      await run("hello", {}, exec);
+      expect(exec).toHaveBeenCalledTimes(1);
+
+      // Advance clock past TTL so the cached entry expires
+      vi.advanceTimersByTime(2000);
+
+      await run("hello", {}, exec);
+      expect(exec).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sessionId present — no caching — executor called twice", async () => {
+    const { runGemini: run } = await loadRunnerWithEnv({
+      GEMINI_CACHE_TTL_MS: "60000",
+      GEMINI_CACHE_MAX_ENTRIES: "50",
+    });
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({ response: "session result" }),
+    });
+    await run("hello", { sessionId: "sess-1" }, exec);
+    await run("hello", { sessionId: "sess-1" }, exec);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("FIFO eviction with GEMINI_CACHE_MAX_ENTRIES=2 — oldest evicted, newer preserved", async () => {
+    const { runGemini: run } = await loadRunnerWithEnv({
+      GEMINI_CACHE_TTL_MS: "60000",
+      GEMINI_CACHE_MAX_ENTRIES: "2",
+    });
+    let callCount = 0;
+    const exec = vi.fn().mockImplementation(async () => {
+      callCount++;
+      return { stdout: JSON.stringify({ response: `result-${callCount}` }) };
+    });
+
+    // Fill cache to max: [A, B]
+    await run("prompt-A", {}, exec);
+    await run("prompt-B", {}, exec);
+    expect(exec).toHaveBeenCalledTimes(2);
+
+    // Overflow: C evicts oldest (A); cache is now [B, C]
+    await run("prompt-C", {}, exec);
+    expect(exec).toHaveBeenCalledTimes(3);
+
+    // B and C are still cached — no more executor calls
+    await run("prompt-B", {}, exec);
+    await run("prompt-C", {}, exec);
+    expect(exec).toHaveBeenCalledTimes(3);
+
+    // A was evicted — executor must be called again
+    await run("prompt-A", {}, exec);
+    expect(exec).toHaveBeenCalledTimes(4);
+  });
+
+  it("different model option produces a different cache key — both calls execute", async () => {
+    const { runGemini: run } = await loadRunnerWithEnv({
+      GEMINI_CACHE_TTL_MS: "60000",
+      GEMINI_CACHE_MAX_ENTRIES: "50",
+    });
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({ response: "ok" }),
+    });
+    await run("What is 1+1?", { model: "gemini-pro" }, exec);
+    await run("What is 1+1?", { model: "gemini-flash" }, exec);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("GEMINI_CACHE_MAX_ENTRIES=0 throws at import", async () => {
+    await expect(
+      loadRunnerWithEnv({ GEMINI_CACHE_MAX_ENTRIES: "0", GEMINI_CACHE_TTL_MS: "60000" })
+    ).rejects.toThrow("GEMINI_CACHE_MAX_ENTRIES must be a positive integer");
   });
 });

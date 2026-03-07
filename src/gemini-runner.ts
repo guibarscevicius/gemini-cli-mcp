@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as nodePath from "node:path";
@@ -80,6 +80,29 @@ const semaphore = new Semaphore(MAX_CONCURRENT);
 
 const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES ?? "3", 10);
 const RETRY_BASE_MS = parseInt(process.env.GEMINI_RETRY_BASE_MS ?? "1000", 10);
+
+const CACHE_TTL_MS = Math.trunc(Number(process.env.GEMINI_CACHE_TTL_MS ?? "300000"));
+if (CACHE_TTL_MS < 0 || !Number.isFinite(CACHE_TTL_MS)) {
+  throw new Error("GEMINI_CACHE_TTL_MS must be a non-negative integer (0 = disabled)");
+}
+const CACHE_MAX_ENTRIES = Math.trunc(Number(process.env.GEMINI_CACHE_MAX_ENTRIES ?? "50"));
+if (CACHE_MAX_ENTRIES < 1 || !Number.isFinite(CACHE_MAX_ENTRIES)) {
+  throw new Error("GEMINI_CACHE_MAX_ENTRIES must be a positive integer");
+}
+
+interface CacheEntry { response: string; expiresAt: number; }
+const cache = new Map<string, CacheEntry>();
+
+/** Clears all cached entries. Exposed for testing. */
+export function clearCache(): void {
+  cache.clear();
+}
+
+function cacheKey(prompt: string, opts: GeminiOptions): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ prompt, model: opts.model ?? "", cwd: opts.cwd ?? "" }))
+    .digest("hex");
+}
 
 function isRetryable(err: unknown): boolean {
   // GeminiOutputError covers all parse failures (non-JSON, unexpected shape, etc.)
@@ -362,6 +385,18 @@ export async function runGemini(
     expandedPrompt = await expandFileRefs(prompt, opts.cwd);
   }
 
+  // Cache check: stateless ask-gemini calls only (sessions are never cached).
+  // Note: single-@file prompts use the file path (not content) in the key — if the
+  // file changes, a stale response may be served until TTL expires.
+  const isCacheable = CACHE_TTL_MS > 0 && !opts.sessionId;
+  if (isCacheable) {
+    const key = cacheKey(expandedPrompt, opts);
+    const cached = cache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.response;
+    }
+  }
+
   const args: string[] = [
     "--yolo",
     "--output-format",
@@ -515,6 +550,17 @@ export async function runGemini(
           error: null,
         }) + "\n"
       );
+    }
+
+    // Store result in cache before returning
+    if (isCacheable) {
+      const key = cacheKey(expandedPrompt, opts);
+      if (cache.size >= CACHE_MAX_ENTRIES) {
+        // FIFO eviction: delete the oldest-inserted entry
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined) cache.delete(oldest);
+      }
+      cache.set(key, { response, expiresAt: Date.now() + CACHE_TTL_MS });
     }
 
     return response;
