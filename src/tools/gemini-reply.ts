@@ -33,8 +33,8 @@ export interface GeminiReplyOutput {
 export async function geminiReply(input: unknown): Promise<GeminiReplyOutput> {
   const { sessionId, prompt, model, cwd } = GeminiReplySchema.parse(input);
 
-  const session = sessionStore.get(sessionId);
-  if (!session) {
+  const sessionExists = sessionStore.get(sessionId);
+  if (!sessionExists) {
     throw new McpError(
       ErrorCode.InvalidParams,
       `Session not found or expired: ${sessionId}. Start a new session with ask-gemini.`
@@ -45,17 +45,14 @@ export async function geminiReply(input: unknown): Promise<GeminiReplyOutput> {
   const history = sessionStore.formatHistory(sessionId);
   const fullPrompt = history ? `${history}\n\n${prompt}` : prompt;
 
-  const response = await runGemini(fullPrompt, { model, cwd });
-  try {
-    sessionStore.appendTurn(sessionId, prompt, response);
-  } catch (err) {
-    process.stderr.write(
-      `[gemini-cli-mcp] Session ${sessionId} evicted during runGemini; ` +
-        `response computed but history not persisted: ${
-          err instanceof Error ? err.message : String(err)
-        }\n`
-    );
-  }
+  const response = await runGemini(fullPrompt, {
+    model,
+    cwd,
+    tool: "gemini-reply",
+    sessionId,
+  });
+  sessionStore.appendTurn(sessionId, "user", prompt);
+  sessionStore.appendTurn(sessionId, "assistant", response);
 
   return { response };
 }

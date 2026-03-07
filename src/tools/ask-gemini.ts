@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { runGemini } from "../gemini-runner.js";
 import { sessionStore } from "../session-store.js";
 
@@ -8,7 +9,7 @@ export const AskGeminiSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Gemini model to use (e.g. gemini-2.5-pro). Defaults to CLI default."),
+    .describe("Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default."),
   cwd: z
     .string()
     .min(1)
@@ -29,10 +30,11 @@ export interface AskGeminiOutput {
 export async function askGemini(input: unknown): Promise<AskGeminiOutput> {
   const { prompt, model, cwd } = AskGeminiSchema.parse(input);
 
-  const response = await runGemini(prompt, { model, cwd });
-
-  // createWithTurn is atomic: the session is never observable with 0 turns
-  const sessionId = sessionStore.createWithTurn(prompt, response);
+  const response = await runGemini(prompt, { model, cwd, tool: "ask-gemini" });
+  const sessionId = randomUUID();
+  sessionStore.create(sessionId);
+  sessionStore.appendTurn(sessionId, "user", prompt);
+  sessionStore.appendTurn(sessionId, "assistant", response);
 
   return { sessionId, response };
 }
@@ -51,7 +53,7 @@ export const askGeminiToolDefinition = {
       model: {
         type: "string",
         description:
-          "Gemini model to use (e.g. gemini-2.5-pro). Defaults to CLI default.",
+          "Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default.",
       },
       cwd: {
         type: "string",

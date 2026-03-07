@@ -23,11 +23,10 @@ const mockRunGemini = vi.mocked(runGemini);
 const mockStore = vi.mocked(sessionStore);
 
 const VALID_SESSION_ID = "11111111-1111-4111-8111-111111111111";
-const MOCK_SESSION = { turns: [], lastAccessed: Date.now() };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockStore.get.mockReturnValue(MOCK_SESSION as ReturnType<typeof sessionStore.get>);
+  mockStore.get.mockReturnValue(true);
   mockStore.formatHistory.mockReturnValue("");
   mockRunGemini.mockResolvedValue("Gemini follow-up response.");
 });
@@ -45,7 +44,7 @@ describe("geminiReply", () => {
     await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "new question" });
     expect(mockRunGemini).toHaveBeenCalledWith(
       "new question",
-      expect.anything()
+      expect.objectContaining({ tool: "gemini-reply", sessionId: VALID_SESSION_ID })
     );
   });
 
@@ -74,7 +73,11 @@ describe("geminiReply", () => {
     });
     expect(mockRunGemini).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ model: "gemini-2.5-flash" })
+      expect.objectContaining({
+        model: "gemini-2.5-flash",
+        tool: "gemini-reply",
+        sessionId: VALID_SESSION_ID,
+      })
     );
   });
 
@@ -86,15 +89,26 @@ describe("geminiReply", () => {
     });
     expect(mockRunGemini).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ cwd: "/my/project" })
+      expect.objectContaining({
+        cwd: "/my/project",
+        tool: "gemini-reply",
+        sessionId: VALID_SESSION_ID,
+      })
     );
   });
 
   it("appends the new turn to the session after success", async () => {
     await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q" });
-    expect(mockStore.appendTurn).toHaveBeenCalledWith(
+    expect(mockStore.appendTurn).toHaveBeenNthCalledWith(
+      1,
       VALID_SESSION_ID,
-      "q",
+      "user",
+      "q"
+    );
+    expect(mockStore.appendTurn).toHaveBeenNthCalledWith(
+      2,
+      VALID_SESSION_ID,
+      "assistant",
       "Gemini follow-up response."
     );
   });
@@ -102,7 +116,7 @@ describe("geminiReply", () => {
   // ── Session lookup ─────────────────────────────────────────────────────────
 
   it("throws McpError(InvalidParams) for unknown sessionId", async () => {
-    mockStore.get.mockReturnValue(null);
+    mockStore.get.mockReturnValue(false);
     try {
       await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" });
       expect.fail("should have thrown");
@@ -115,7 +129,7 @@ describe("geminiReply", () => {
 
   it("McpError message includes the bad sessionId for debugging", async () => {
     expect.assertions(1);
-    mockStore.get.mockReturnValue(null);
+    mockStore.get.mockReturnValue(false);
     try {
       await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" });
       expect.fail("should have thrown");
@@ -125,7 +139,7 @@ describe("geminiReply", () => {
   });
 
   it("does not call runGemini when session is not found", async () => {
-    mockStore.get.mockReturnValue(null);
+    mockStore.get.mockReturnValue(false);
     await expect(
       geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" })
     ).rejects.toThrow();
@@ -173,27 +187,5 @@ describe("geminiReply", () => {
       geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" })
     ).rejects.toThrow();
     expect(mockStore.appendTurn).not.toHaveBeenCalled();
-  });
-
-  it("returns the response even if the session is evicted before appendTurn", async () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    mockStore.appendTurn.mockImplementationOnce(() => {
-      throw new Error("Session not found: expired");
-    });
-
-    try {
-      await expect(
-        geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" })
-      ).resolves.toEqual({
-        response: "Gemini follow-up response.",
-      });
-      expect(stderrSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Session ${VALID_SESSION_ID} evicted during runGemini; response computed but history not persisted`
-        )
-      );
-    } finally {
-      stderrSpy.mockRestore();
-    }
   });
 });

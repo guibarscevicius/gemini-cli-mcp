@@ -59,7 +59,7 @@ A safe, auditable MCP server that wraps the official [`@google/gemini-cli`](http
 
 Add to `~/.claude/settings.json` for Claude Code CLI, or your host's MCP config file.
 
-> **Model compatibility note (Gemini CLI ≥ 0.31):** The CLI forces `include_thoughts` for models that support thinking. `gemini-2.0-flash` triggers a 400 error due to this. Use `gemini-2.5-flash-lite`, `gemini-2.5-pro`, or omit `model` to let the CLI pick its default.
+> **Model compatibility note (Gemini CLI ≥ 0.31):** The CLI forces `include_thoughts` for models that support thinking. `gemini-2.0-flash` triggers a 400 error due to this. Recommended: `gemini-3-flash-preview` (fast, default), `gemini-3.1-pro-preview` (deep reasoning), `gemini-3.1-flash-lite` (cost-efficient). `gemini-3-pro-preview` was shut down March 9 2026 — migrate away.
 
 ## Tools
 
@@ -68,7 +68,7 @@ Add to `~/.claude/settings.json` for Claude Code CLI, or your host's MCP config 
 ```
 Input:
   prompt   string   Required. The message to send.
-  model    string   Optional. E.g. "gemini-2.5-pro". Defaults to CLI default.
+  model    string   Optional. E.g. "gemini-3-flash-preview". Defaults to CLI default.
   cwd      string   Optional. Working directory — required for relative @file paths.
 
 Output:
@@ -90,6 +90,18 @@ Output:
 ```
 
 Sessions auto-expire after 60 minutes of inactivity.
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEMINI_MAX_RETRIES` | `3` | Max auto-retries on empty-stdout/429/ETIMEDOUT. Set `0` to disable. |
+| `GEMINI_RETRY_BASE_MS` | `1000` | Base delay for first retry (exponential backoff). |
+| `GEMINI_MAX_CONCURRENT` | `2` | Max parallel Gemini subprocesses per server. |
+| `GEMINI_QUEUE_TIMEOUT_MS` | `60000` | Max wait time for a concurrency slot (ms). |
+| `GEMINI_STRUCTURED_LOGS` | `0` | Set to `1` to emit JSON log lines to stderr per request. |
+| `GEMINI_MAX_HISTORY_TURNS` | `20` | Sliding window for session history (turn-pairs). `0` = unlimited. |
+| `GEMINI_SESSION_DB` | `~/.gemini-cli-mcp/sessions.db` | Path for SQLite session store. Use `:memory:` for ephemeral. |
 
 ## Using `@file` syntax
 
@@ -146,7 +158,7 @@ The repo includes a `.mcp.json` that enables [Serena](https://github.com/oraios/
 
 ## How sessions work
 
-Since `gemini --resume <id>` is scoped to a project directory and cannot be used from a global MCP server, this server manages conversation history in-process. On each `gemini-reply` call, prior turns are prepended as a structured context block:
+Since `gemini --resume <id>` is scoped to a project directory and cannot be used from a global MCP server, this server manages conversation history in a local SQLite store. On each `gemini-reply` call, prior turns are prepended as a structured context block:
 
 ```
 [Conversation history]

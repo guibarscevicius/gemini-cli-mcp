@@ -9,7 +9,6 @@ vi.mock("../../src/gemini-runner.js", () => ({
 vi.mock("../../src/session-store.js", () => ({
   sessionStore: {
     create: vi.fn(),
-    createWithTurn: vi.fn(),
     get: vi.fn(),
     appendTurn: vi.fn(),
     formatHistory: vi.fn(),
@@ -25,7 +24,6 @@ const mockStore = vi.mocked(sessionStore);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockStore.createWithTurn.mockReturnValue("test-session-id");
   mockRunGemini.mockResolvedValue("Gemini says hello.");
 });
 
@@ -34,7 +32,9 @@ describe("askGemini", () => {
 
   it("returns sessionId and response on success", async () => {
     const result = await askGemini({ prompt: "hello" });
-    expect(result.sessionId).toBe("test-session-id");
+    expect(result.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
     expect(result.response).toBe("Gemini says hello.");
   });
 
@@ -42,7 +42,7 @@ describe("askGemini", () => {
     await askGemini({ prompt: "What is the weather?" });
     expect(mockRunGemini).toHaveBeenCalledWith(
       "What is the weather?",
-      expect.objectContaining({ model: undefined, cwd: undefined })
+      expect.objectContaining({ model: undefined, cwd: undefined, tool: "ask-gemini" })
     );
   });
 
@@ -50,7 +50,7 @@ describe("askGemini", () => {
     await askGemini({ prompt: "hello", model: "gemini-2.5-pro" });
     expect(mockRunGemini).toHaveBeenCalledWith(
       "hello",
-      expect.objectContaining({ model: "gemini-2.5-pro" })
+      expect.objectContaining({ model: "gemini-2.5-pro", tool: "ask-gemini" })
     );
   });
 
@@ -58,20 +58,25 @@ describe("askGemini", () => {
     await askGemini({ prompt: "review @src/auth.ts", cwd: "/my/project" });
     expect(mockRunGemini).toHaveBeenCalledWith(
       "review @src/auth.ts",
-      expect.objectContaining({ cwd: "/my/project" })
+      expect.objectContaining({ cwd: "/my/project", tool: "ask-gemini" })
     );
   });
 
-  it("creates a new session atomically via sessionStore.createWithTurn()", async () => {
-    await askGemini({ prompt: "hello" });
-    expect(mockStore.createWithTurn).toHaveBeenCalledOnce();
-  });
-
-  it("stores the user prompt and gemini response atomically in createWithTurn", async () => {
-    await askGemini({ prompt: "my prompt" });
-    expect(mockStore.createWithTurn).toHaveBeenCalledWith("my prompt", "Gemini says hello.");
-    // appendTurn is no longer called — createWithTurn replaces create()+appendTurn()
-    expect(mockStore.appendTurn).not.toHaveBeenCalled();
+  it("creates a new session and stores user/assistant turns", async () => {
+    const result = await askGemini({ prompt: "my prompt" });
+    expect(mockStore.create).toHaveBeenCalledWith(result.sessionId);
+    expect(mockStore.appendTurn).toHaveBeenNthCalledWith(
+      1,
+      result.sessionId,
+      "user",
+      "my prompt"
+    );
+    expect(mockStore.appendTurn).toHaveBeenNthCalledWith(
+      2,
+      result.sessionId,
+      "assistant",
+      "Gemini says hello."
+    );
   });
 
   // ── Input validation (Zod) ─────────────────────────────────────────────────
@@ -104,9 +109,10 @@ describe("askGemini", () => {
     );
   });
 
-  it("does not call createWithTurn if runGemini throws (no orphan session)", async () => {
+  it("does not call create/appendTurn if runGemini throws", async () => {
     mockRunGemini.mockRejectedValue(new Error("failed"));
     await expect(askGemini({ prompt: "hello" })).rejects.toThrow("failed");
-    expect(mockStore.createWithTurn).not.toHaveBeenCalled();
+    expect(mockStore.create).not.toHaveBeenCalled();
+    expect(mockStore.appendTurn).not.toHaveBeenCalled();
   });
 });
