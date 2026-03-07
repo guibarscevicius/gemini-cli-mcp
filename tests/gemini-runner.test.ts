@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -150,6 +150,47 @@ function makeErrorExecutor(
 ): GeminiExecutor {
   return vi.fn().mockRejectedValue(err);
 }
+
+type RunnerModule = typeof import("../src/gemini-runner.js");
+
+const RELIABILITY_ENV_KEYS = [
+  "GEMINI_MAX_RETRIES",
+  "GEMINI_RETRY_BASE_MS",
+  "GEMINI_MAX_CONCURRENT",
+  "GEMINI_QUEUE_TIMEOUT_MS",
+  "GEMINI_STRUCTURED_LOGS",
+] as const;
+
+const originalReliabilityEnv = Object.fromEntries(
+  RELIABILITY_ENV_KEYS.map((key) => [key, process.env[key]])
+) as Record<(typeof RELIABILITY_ENV_KEYS)[number], string | undefined>;
+
+async function loadRunnerWithEnv(
+  env: Partial<Record<(typeof RELIABILITY_ENV_KEYS)[number], string>>
+): Promise<RunnerModule> {
+  for (const key of RELIABILITY_ENV_KEYS) {
+    const value = env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  vi.resetModules();
+  return import("../src/gemini-runner.js");
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const key of RELIABILITY_ENV_KEYS) {
+    const value = originalReliabilityEnv[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+});
 
 describe("runGemini", () => {
   it("resolves with parsed response text on success", async () => {
@@ -382,9 +423,9 @@ describe("runGemini", () => {
   });
 
   it("falls back to error.message when stderr is empty", async () => {
-    const exec = makeErrorExecutor({ stderr: "", message: "ETIMEDOUT" });
+    const exec = makeErrorExecutor({ stderr: "", message: "EPIPE" });
     await expect(runGemini("hello", {}, exec)).rejects.toThrow(
-      "gemini process failed: ETIMEDOUT"
+      "gemini process failed: EPIPE"
     );
   });
 
@@ -426,8 +467,11 @@ describe("runGemini", () => {
   });
 
   it("propagates JSON parse errors from parseGeminiOutput", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_MAX_RETRIES: "0",
+    });
     const exec = makeExecutor("this is not json");
-    await expect(runGemini("hello", {}, exec)).rejects.toThrow(
+    await expect(freshRunGemini("hello", {}, exec)).rejects.toThrow(
       "gemini returned non-JSON output"
     );
   });
@@ -445,6 +489,141 @@ describe("runGemini", () => {
       runGemini("Read @src/a.ts and @src/b.ts", {}, exec)
     ).rejects.toThrow("Multiple @file tokens require the cwd option");
     expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+describe("runGemini retries", () => {
+  it("retries retryable non-JSON failures and succeeds on a later attempt", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_MAX_RETRIES: "3",
+      GEMINI_RETRY_BASE_MS: "0",
+    });
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({ stdout: "not json 1" })
+      .mockResolvedValueOnce({ stdout: "not json 2" })
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ response: "ok after retries" }) });
+
+    const result = await freshRunGemini("hello", {}, exec as unknown as GeminiExecutor);
+    expect(result).toBe("ok after retries");
+    expect(exec).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry non-retryable executor errors", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_MAX_RETRIES: "3",
+      GEMINI_RETRY_BASE_MS: "0",
+    });
+    const exec = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("missing binary"), { code: "ENOENT" }));
+
+    await expect(freshRunGemini("hello", {}, exec as unknown as GeminiExecutor)).rejects.toThrow(
+      "gemini binary not found. Is the Gemini CLI installed and on PATH?"
+    );
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("attempts only once when GEMINI_MAX_RETRIES=0", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_MAX_RETRIES: "0",
+      GEMINI_RETRY_BASE_MS: "0",
+    });
+    const exec = vi.fn().mockResolvedValue({ stdout: "not json once" });
+
+    await expect(freshRunGemini("hello", {}, exec as unknown as GeminiExecutor)).rejects.toThrow(
+      "gemini returned non-JSON output"
+    );
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runGemini concurrency", () => {
+  it("serializes requests when GEMINI_MAX_CONCURRENT=1", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_MAX_CONCURRENT: "1",
+      GEMINI_MAX_RETRIES: "0",
+    });
+    const order: string[] = [];
+    let resolveFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    let callIndex = 0;
+
+    const exec = vi.fn().mockImplementation(async () => {
+      callIndex++;
+      const current = callIndex;
+      order.push(`start-${current}`);
+      if (current === 1) {
+        await firstGate;
+        order.push("end-1");
+        return { stdout: JSON.stringify({ response: "first" }) };
+      }
+      order.push(`end-${current}`);
+      return { stdout: JSON.stringify({ response: "second" }) };
+    }) as unknown as GeminiExecutor;
+
+    const first = freshRunGemini("prompt one", {}, exec);
+    await Promise.resolve();
+    const second = freshRunGemini("prompt two", {}, exec);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(exec).toHaveBeenCalledTimes(1);
+
+    resolveFirst?.();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toBe("first");
+    expect(secondResult).toBe("second");
+    expect(order).toEqual(["start-1", "end-1", "start-2", "end-2"]);
+  });
+});
+
+describe("runGemini telemetry", () => {
+  it("emits structured success telemetry when GEMINI_STRUCTURED_LOGS=1", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_STRUCTURED_LOGS: "1",
+      GEMINI_MAX_RETRIES: "0",
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exec = vi.fn().mockResolvedValue({ stdout: JSON.stringify({ response: "ok" }) });
+
+    await freshRunGemini("hello", { tool: "ask-gemini" }, exec as unknown as GeminiExecutor);
+
+    const logLine = stderrSpy.mock.calls
+      .map(([line]) => String(line))
+      .find((line) => line.includes("\"event\":\"gemini_request\""));
+    expect(logLine).toBeDefined();
+    const payload = JSON.parse(logLine as string) as Record<string, unknown>;
+
+    expect(payload.event).toBe("gemini_request");
+    expect(payload.status).toBe("ok");
+    expect(payload.tool).toBe("ask-gemini");
+  });
+
+  it("emits structured error telemetry when request fails", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_STRUCTURED_LOGS: "1",
+      GEMINI_MAX_RETRIES: "0",
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exec = vi.fn().mockRejectedValue(new Error("fatal failure"));
+
+    await expect(
+      freshRunGemini("hello", { tool: "gemini-reply", sessionId: "abc" }, exec as unknown as GeminiExecutor)
+    ).rejects.toThrow("gemini process failed: fatal failure");
+
+    const logLine = stderrSpy.mock.calls
+      .map(([line]) => String(line))
+      .find((line) => line.includes("\"event\":\"gemini_request\""));
+    expect(logLine).toBeDefined();
+    const payload = JSON.parse(logLine as string) as Record<string, unknown>;
+
+    expect(payload.event).toBe("gemini_request");
+    expect(payload.status).toBe("error");
+    expect(payload.tool).toBe("gemini-reply");
   });
 });
 

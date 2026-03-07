@@ -1,131 +1,100 @@
-import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import nodePath from "node:path";
+import * as os from "node:os";
+import { mkdirSync } from "node:fs";
 
-export interface Turn {
-  role: "user" | "assistant";
+export const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+const GC_INTERVAL_MS = 5 * 60 * 1000; // 5 min
+
+type TurnRole = "user" | "assistant";
+
+interface Turn {
+  role: TurnRole;
   content: string;
 }
 
-interface Session {
-  readonly turns: ReadonlyArray<Readonly<Turn>>;
-  /** Unix timestamp (ms) of the last read or write — used for TTL eviction. */
-  readonly lastAccessed: number;
-}
-
-interface MutableSession {
-  turns: Turn[];
-  lastAccessed: number;
-}
-
-// Sessions idle longer than this are garbage-collected
-const SESSION_TTL_MS = 60 * 60 * 1000; // 60 minutes
-// How often to sweep expired sessions
-const GC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-
-/**
- * In-memory store for multi-turn Gemini sessions.
- *
- * Why not use `gemini --resume <id>`?
- * The `--resume` flag is scoped to a project directory: session files live at
- * `~/.gemini/tmp/<hash_of_project_dir>/chats/`. Even if we passed a consistent
- * `cwd`, each MCP caller has a different project context, so we would need to
- * store the originating `cwd` per session and replay it on every `--resume`
- * call — recreating the same bookkeeping we're doing here, but with an
- * unreliable file-system dependency. In-process history is simpler and more
- * portable.
- */
 export class SessionStore {
-  private readonly sessions = new Map<string, MutableSession>();
-  private readonly gcTimer: ReturnType<typeof setInterval>;
+  private db: DatabaseSync;
+  private gcTimer: ReturnType<typeof setInterval>;
 
-  constructor(ttlMs = SESSION_TTL_MS, gcIntervalMs = GC_INTERVAL_MS) {
-    this.gcTimer = setInterval(() => this.gc(ttlMs), gcIntervalMs).unref();
+  constructor(ttlMs = SESSION_TTL_MS, gcIntervalMs = GC_INTERVAL_MS, dbPath?: string) {
+    const resolvedPath =
+      dbPath ??
+      (process.env.GEMINI_SESSION_DB ?? nodePath.join(os.homedir(), ".gemini-cli-mcp", "sessions.db"));
+
+    if (resolvedPath !== ":memory:") {
+      mkdirSync(nodePath.dirname(resolvedPath), { recursive: true });
+    }
+
+    this.db = new DatabaseSync(resolvedPath);
+    this.db.exec("PRAGMA journal_mode=WAL");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      turns TEXT NOT NULL,
+      last_accessed INTEGER NOT NULL
+    )`);
+
+    this.gcTimer = setInterval(() => {
+      const cutoff = Date.now() - ttlMs;
+      this.db.prepare("DELETE FROM sessions WHERE last_accessed < ?").run(cutoff);
+    }, gcIntervalMs);
+
+    if (this.gcTimer.unref) this.gcTimer.unref();
   }
 
-  /** Create a new empty session and return its ID. */
-  private create(): string {
-    const id = randomUUID();
-    this.sessions.set(id, { turns: [], lastAccessed: Date.now() });
-    return id;
+  create(id: string): void {
+    this.db
+      .prepare("INSERT OR REPLACE INTO sessions (id, turns, last_accessed) VALUES (?, ?, ?)")
+      .run(id, JSON.stringify([]), Date.now());
   }
 
-  /**
-   * Create a new session pre-populated with the first user+assistant turn.
-   * Preferred over create() + appendTurn() — atomic, so the session is never
-   * observable in a turns-empty state.
-   */
-  createWithTurn(userContent: string, assistantContent: string): string {
-    const id = randomUUID();
-    this.sessions.set(id, {
-      turns: [
-        { role: "user", content: userContent },
-        { role: "assistant", content: assistantContent },
-      ],
-      lastAccessed: Date.now(),
-    });
-    return id;
+  get(id: string): boolean {
+    const row = this.db.prepare("SELECT id FROM sessions WHERE id = ?").get(id);
+    if (!row) return false;
+    this.db.prepare("UPDATE sessions SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
+    return true;
   }
 
-  /** Retrieve a session, updating lastAccessed. Returns null if not found / expired. */
-  get(id: string): Session | null {
-    const session = this.sessions.get(id);
-    if (!session) return null;
-    session.lastAccessed = Date.now();
-    return {
-      turns: session.turns.map((turn) => ({ ...turn })),
-      lastAccessed: session.lastAccessed,
-    };
+  appendTurn(id: string, role: TurnRole, content: string): void {
+    const row = this.db.prepare("SELECT turns FROM sessions WHERE id = ?").get(id) as
+      | { turns: string }
+      | undefined;
+    if (!row) return;
+    const turns: Turn[] = JSON.parse(row.turns);
+    turns.push({ role, content });
+    this.db
+      .prepare("UPDATE sessions SET turns = ?, last_accessed = ? WHERE id = ?")
+      .run(JSON.stringify(turns), Date.now(), id);
   }
 
-  /** Append a user+assistant turn pair to an existing session */
-  appendTurn(id: string, userContent: string, assistantContent: string): void {
-    const session = this.sessions.get(id);
-    if (!session) throw new Error(`Session not found: ${id}`);
-    session.turns.push(
-      { role: "user", content: userContent },
-      { role: "assistant", content: assistantContent }
-    );
-    session.lastAccessed = Date.now();
-  }
-
-  /**
-   * Format prior turns as a structured context block to prepend to a new prompt.
-   * Returns empty string if the session is missing or has no prior turns.
-   * Callers should invoke get() first to verify the session exists and refresh TTL;
-   * formatHistory() itself is a read-only formatter and does not update lastAccessed.
-   */
   formatHistory(id: string): string {
-    const session = this.sessions.get(id);
-    if (!session || session.turns.length === 0) return "";
+    const row = this.db.prepare("SELECT turns FROM sessions WHERE id = ?").get(id) as
+      | { turns: string }
+      | undefined;
+    if (!row) return "";
+    const allTurns: Turn[] = JSON.parse(row.turns);
+    if (allTurns.length === 0) return "";
+
+    const maxPairs = parseInt(process.env.GEMINI_MAX_HISTORY_TURNS ?? "20");
+    const limit = maxPairs > 0 ? maxPairs * 2 : Infinity;
+    const truncated = isFinite(limit) && allTurns.length > limit;
+    const turns = isFinite(limit) ? allTurns.slice(-limit) : allTurns;
 
     const lines: string[] = ["[Conversation history]"];
-    for (const turn of session.turns) {
-      const label = turn.role === "user" ? "User" : "Assistant";
-      lines.push(`${label}: ${turn.content}`);
+    if (truncated) {
+      lines.push(`[... ${allTurns.length - turns.length} earlier turns omitted ...]`);
+    }
+    for (const turn of turns) {
+      lines.push(`${turn.role === "user" ? "User" : "Assistant"}: ${turn.content}`);
     }
     lines.push("[End of history — continue the conversation]");
     return lines.join("\n");
   }
 
-  /** Remove sessions that have exceeded the TTL */
-  private gc(ttlMs: number): void {
-    const cutoff = Date.now() - ttlMs;
-    let evicted = 0;
-    for (const [id, session] of this.sessions) {
-      if (session.lastAccessed < cutoff) {
-        this.sessions.delete(id);
-        evicted++;
-      }
-    }
-    if (evicted > 0) {
-      process.stderr.write(`[gemini-cli-mcp] GC: evicted ${evicted} expired session(s)\n`);
-    }
-  }
-
-  /** Tear down the GC timer (useful in tests) */
   destroy(): void {
     clearInterval(this.gcTimer);
+    this.db.close();
   }
 }
 
-// Singleton instance shared across all tool handlers
 export const sessionStore = new SessionStore();

@@ -1,228 +1,145 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { SessionStore } from "../src/session-store.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import nodePath from "node:path";
+import * as os from "node:os";
+import { SessionStore, SESSION_TTL_MS } from "../src/session-store.js";
 
 describe("SessionStore", () => {
   let store: SessionStore;
+  const originalMaxHistory = process.env.GEMINI_MAX_HISTORY_TURNS;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    store = new SessionStore();
+    process.env.GEMINI_MAX_HISTORY_TURNS = "20";
+    store = new SessionStore(SESSION_TTL_MS, undefined, ":memory:");
   });
 
   afterEach(() => {
     store.destroy();
     vi.useRealTimers();
+    if (originalMaxHistory === undefined) {
+      delete process.env.GEMINI_MAX_HISTORY_TURNS;
+    } else {
+      process.env.GEMINI_MAX_HISTORY_TURNS = originalMaxHistory;
+    }
   });
 
-  // ── createWithTurn() ──────────────────────────────────────────────────────
+  it("create() and get() manage session existence", () => {
+    const id = "session-1";
+    expect(store.get(id)).toBe(false);
 
-  it("createWithTurn() returns a UUID and session is immediately populated", () => {
-    const id = store.createWithTurn("hi", "hello back");
-    expect(id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-    );
-    const session = store.get(id)!;
-    expect(session.turns).toHaveLength(2);
-    expect(session.turns[0]).toEqual({ role: "user", content: "hi" });
-    expect(session.turns[1]).toEqual({ role: "assistant", content: "hello back" });
+    store.create(id);
+    expect(store.get(id)).toBe(true);
   });
 
-  it("createWithTurn() returns a unique ID each call", () => {
-    const ids = new Set(
-      Array.from({ length: 10 }, (_, index) =>
-        store.createWithTurn(`question ${index}`, `answer ${index}`)
-      )
-    );
-    expect(ids.size).toBe(10);
-  });
-
-  it("createWithTurn() session is never observable with 0 turns", () => {
-    // The session only becomes visible once turns are already stored
-    const id = store.createWithTurn("q", "a");
-    expect(store.get(id)!.turns.length).toBeGreaterThan(0);
-  });
-
-  // ── get() ─────────────────────────────────────────────────────────────────
-
-  it("get() returns session after createWithTurn()", () => {
-    const id = store.createWithTurn("hi", "hello");
-    expect(store.get(id)).not.toBeNull();
-  });
-
-  it("get() returns null for unknown ID", () => {
-    expect(store.get("00000000-0000-4000-8000-000000000000")).toBeNull();
-  });
-
-  it("get() updates lastAccessed on each call", () => {
-    const id = store.createWithTurn("hello", "hi");
-    const session1 = store.get(id)!;
-    const t1 = session1.lastAccessed;
-
-    vi.advanceTimersByTime(1000);
-
-    const session2 = store.get(id)!;
-    expect(session2.lastAccessed).toBeGreaterThan(t1);
-  });
-
-  it("get() returns a defensive copy of the session data", () => {
-    const id = store.createWithTurn("hello", "hi there");
-    const snapshot = store.get(id)! as {
-      turns: Array<{ role: "user" | "assistant"; content: string }>;
-      lastAccessed: number;
-    };
-
-    snapshot.turns[0].content = "mutated";
-    snapshot.turns.push({ role: "user", content: "extra" });
-
-    const current = store.get(id)!;
-    expect(current.turns).toHaveLength(2);
-    expect(current.turns[0]).toEqual({ role: "user", content: "hello" });
-  });
-
-  // ── appendTurn() ──────────────────────────────────────────────────────────
-
-  it("appendTurn() adds a user turn followed by an assistant turn", () => {
-    const id = store.createWithTurn("initial user", "initial assistant");
-    store.appendTurn(id, "hello", "hi there");
-
-    const session = store.get(id)!;
-    expect(session.turns).toHaveLength(4);
-    expect(session.turns[2]).toEqual({ role: "user", content: "hello" });
-    expect(session.turns[3]).toEqual({ role: "assistant", content: "hi there" });
-  });
-
-  it("appendTurn() accumulates turns across multiple calls", () => {
-    const id = store.createWithTurn("start", "reply");
-    store.appendTurn(id, "turn 1 user", "turn 1 gemini");
-    store.appendTurn(id, "turn 2 user", "turn 2 gemini");
-
-    expect(store.get(id)!.turns).toHaveLength(6);
-  });
-
-  it("appendTurn() throws for unknown session ID", () => {
-    expect(() =>
-      store.appendTurn("00000000-0000-4000-8000-000000000000", "x", "y")
-    ).toThrow("Session not found");
-  });
-
-  it("appendTurn() updates lastAccessed", () => {
-    const id = store.createWithTurn("hello", "hi");
-    const before = store.get(id)!.lastAccessed;
-    vi.advanceTimersByTime(500);
-    store.appendTurn(id, "u", "g");
-    expect(store.get(id)!.lastAccessed).toBeGreaterThan(before);
-  });
-
-  // ── formatHistory() ───────────────────────────────────────────────────────
-
-  it("formatHistory() returns empty string for unknown session ID", () => {
-    expect(store.formatHistory("00000000-0000-4000-8000-000000000000")).toBe("");
-  });
-
-  it("formatHistory() wraps turns in [Conversation history] block", () => {
-    const id = store.createWithTurn("what is 2+2?", "4");
-
-    const history = store.formatHistory(id);
-    expect(history).toContain("[Conversation history]");
-    expect(history).toContain("[End of history");
-    expect(history).toContain("User: what is 2+2?");
-    expect(history).toContain("Assistant: 4");
-  });
-
-  it("formatHistory() includes all turns in order", () => {
-    const id = store.createWithTurn("q1", "a1");
-    store.appendTurn(id, "q2", "a2");
+  it("appendTurn() and formatHistory() keep turn order", () => {
+    const id = "session-order";
+    store.create(id);
+    store.appendTurn(id, "user", "q1");
+    store.appendTurn(id, "assistant", "a1");
+    store.appendTurn(id, "user", "q2");
+    store.appendTurn(id, "assistant", "a2");
 
     const history = store.formatHistory(id);
     const lines = history.split("\n");
-    // Header + 4 turn lines + footer
-    expect(lines).toHaveLength(6);
+
+    expect(lines[0]).toBe("[Conversation history]");
     expect(lines[1]).toBe("User: q1");
     expect(lines[2]).toBe("Assistant: a1");
     expect(lines[3]).toBe("User: q2");
     expect(lines[4]).toBe("Assistant: a2");
+    expect(lines[5]).toBe("[End of history — continue the conversation]");
   });
 
-  // ── Multiple independent sessions ──────────────────────────────────────────
+  it("formatHistory() truncation", () => {
+    const id = "session-truncate";
+    store.create(id);
 
-  it("two sessions are completely independent", () => {
-    const id1 = store.createWithTurn("session 1 question", "session 1 answer");
-    const id2 = store.createWithTurn("session 2 question", "session 2 answer");
-    store.appendTurn(id1, "session 1 question", "session 1 answer");
+    for (let i = 1; i <= 25; i++) {
+      store.appendTurn(id, "user", `user-${i}`);
+      store.appendTurn(id, "assistant", `assistant-${i}`);
+    }
 
-    expect(store.get(id1)!.turns).toHaveLength(4);
-    expect(store.get(id2)!.turns).toHaveLength(2);
-    expect(store.formatHistory(id2)).not.toContain("session 1 question");
+    const history = store.formatHistory(id);
+    const lines = history.split("\n");
+    const turnLines = lines.filter(
+      (line) => line.startsWith("User:") || line.startsWith("Assistant:")
+    );
+
+    expect(history).toContain("earlier turns omitted");
+    expect(turnLines).toHaveLength(40);
+    expect(history).not.toContain("User: user-5\n");
+    expect(history).not.toContain("Assistant: assistant-5\n");
+    expect(history).toContain("User: user-25");
+    expect(history).toContain("Assistant: assistant-25");
   });
 
-  // ── TTL / garbage collection ───────────────────────────────────────────────
+  it("formatHistory() unlimited when GEMINI_MAX_HISTORY_TURNS=0", () => {
+    process.env.GEMINI_MAX_HISTORY_TURNS = "0";
+    const id = "session-unlimited";
+    store.create(id);
 
-  it("sessions survive before TTL expires", () => {
-    const TTL = 1000;
-    const GC = 500;
-    const s = new SessionStore(TTL, GC);
-    const id = s.createWithTurn("q", "a");
+    for (let i = 1; i <= 25; i++) {
+      store.appendTurn(id, "user", `user-${i}`);
+      store.appendTurn(id, "assistant", `assistant-${i}`);
+    }
 
-    vi.advanceTimersByTime(GC + 1); // GC runs once
-    expect(s.get(id)).not.toBeNull(); // Still alive — TTL not reached
+    const history = store.formatHistory(id);
+    const turnLines = history
+      .split("\n")
+      .filter((line) => line.startsWith("User:") || line.startsWith("Assistant:"));
 
-    s.destroy();
+    expect(history).not.toContain("earlier turns omitted");
+    expect(turnLines).toHaveLength(50);
+    expect(history).toContain("User: user-1");
+    expect(history).toContain("Assistant: assistant-1");
+    expect(history).toContain("User: user-25");
+    expect(history).toContain("Assistant: assistant-25");
   });
 
-  it("sessions are removed after TTL expires and GC runs", () => {
-    const TTL = 1000;
-    const GC = 500;
-    const s = new SessionStore(TTL, GC);
-    const id = s.createWithTurn("q", "a");
-
-    vi.advanceTimersByTime(TTL + GC + 1); // TTL elapsed, then GC fires
-    expect(s.get(id)).toBeNull();
-
-    s.destroy();
-  });
-
-  it("active sessions are not evicted by GC", () => {
-    const TTL = 1000;
-    const GC = 400;
-    const s = new SessionStore(TTL, GC);
-    const id = s.createWithTurn("q", "a");
-
-    // Keep accessing the session to refresh lastAccessed
-    vi.advanceTimersByTime(800);
-    s.get(id); // refreshes lastAccessed
-    vi.advanceTimersByTime(800); // total 1600ms but lastAccessed was reset at 800ms
-
-    expect(s.get(id)).not.toBeNull();
-    s.destroy();
-  });
-
-  it("GC logs when expired sessions are evicted", () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const s = new SessionStore(1000, 500);
-    s.createWithTurn("q", "a");
+  it("SQLite persistence round-trip", () => {
+    const dir = mkdtempSync(nodePath.join(os.tmpdir(), "gemini-session-store-"));
+    const dbPath = nodePath.join(dir, "sessions.db");
+    const id = "session-persist";
+    const first = new SessionStore(SESSION_TTL_MS, undefined, dbPath);
 
     try {
-      vi.advanceTimersByTime(1501);
-      expect(stderrSpy).toHaveBeenCalledWith(
-        "[gemini-cli-mcp] GC: evicted 1 expired session(s)\n"
-      );
+      first.create(id);
+      first.appendTurn(id, "user", "hello");
+      first.appendTurn(id, "assistant", "hi");
+      first.appendTurn(id, "user", "how are you?");
+      first.appendTurn(id, "assistant", "doing well");
     } finally {
-      stderrSpy.mockRestore();
-      s.destroy();
+      first.destroy();
+    }
+
+    const second = new SessionStore(SESSION_TTL_MS, undefined, dbPath);
+    try {
+      expect(second.get(id)).toBe(true);
+      const history = second.formatHistory(id);
+      expect(history).toContain("User: hello");
+      expect(history).toContain("Assistant: hi");
+      expect(history).toContain("User: how are you?");
+      expect(history).toContain("Assistant: doing well");
+    } finally {
+      second.destroy();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  // ── destroy() ─────────────────────────────────────────────────────────────
+  it("expired sessions are removed by GC", () => {
+    const ttlMs = 1_000;
+    const gcIntervalMs = 200;
+    const gcStore = new SessionStore(ttlMs, gcIntervalMs, ":memory:");
 
-  it("destroy() stops the GC timer (no pending timers after destroy)", () => {
-    const s = new SessionStore(1000, 500);
-    const id = s.createWithTurn("q", "a");
-    s.destroy();
+    try {
+      const id = "session-gc";
+      gcStore.create(id);
 
-    // After destroy, GC should not fire even if time advances past TTL
-    vi.advanceTimersByTime(2000);
-    // Session is still in map because GC didn't run after destroy
-    // (We can't directly inspect the map, but no unhandled timer errors = pass)
-    expect(s.get(id)).not.toBeNull();
+      vi.advanceTimersByTime(ttlMs + gcIntervalMs + 1);
+      expect(gcStore.get(id)).toBe(false);
+    } finally {
+      gcStore.destroy();
+    }
   });
 });

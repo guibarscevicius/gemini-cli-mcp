@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { runGemini } from "../gemini-runner.js";
 import { sessionStore } from "../session-store.js";
 
@@ -29,10 +30,11 @@ export interface AskGeminiOutput {
 export async function askGemini(input: unknown): Promise<AskGeminiOutput> {
   const { prompt, model, cwd } = AskGeminiSchema.parse(input);
 
-  const response = await runGemini(prompt, { model, cwd });
-
-  // createWithTurn is atomic: the session is never observable with 0 turns
-  const sessionId = sessionStore.createWithTurn(prompt, response);
+  const response = await runGemini(prompt, { model, cwd, tool: "ask-gemini" });
+  const sessionId = randomUUID();
+  sessionStore.create(sessionId);
+  sessionStore.appendTurn(sessionId, "user", prompt);
+  sessionStore.appendTurn(sessionId, "assistant", response);
 
   return { sessionId, response };
 }

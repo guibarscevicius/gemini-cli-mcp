@@ -16,9 +16,99 @@ const TIMEOUT_MS = 300_000;
 // so the CLI reads from disk, completely bypassing the per-argument kernel limit.
 const LARGE_PROMPT_THRESHOLD = 110 * 1024; // 110 KB — 15% below the ~127 KB measured ceiling
 
+class Semaphore {
+  private queue: Array<() => void> = [];
+  private running = 0;
+
+  constructor(private readonly max: number) {}
+
+  acquire(timeoutMs?: number): Promise<void> {
+    if (this.running < this.max) {
+      this.running++;
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const slot = () => {
+        if (timer) clearTimeout(timer);
+        this.running++;
+        resolve();
+      };
+
+      if (timeoutMs !== undefined) {
+        timer = setTimeout(() => {
+          const index = this.queue.indexOf(slot);
+          if (index !== -1) {
+            this.queue.splice(index, 1);
+            reject(
+              new Error(
+                `Gemini request timed out after ${timeoutMs}ms waiting for concurrency slot`
+              )
+            );
+          }
+        }, timeoutMs);
+      }
+
+      this.queue.push(slot);
+    });
+  }
+
+  release(): void {
+    this.running--;
+    this.queue.shift()?.();
+  }
+}
+
+const MAX_CONCURRENT = parseInt(process.env.GEMINI_MAX_CONCURRENT ?? "2", 10);
+const QUEUE_TIMEOUT_MS = parseInt(process.env.GEMINI_QUEUE_TIMEOUT_MS ?? "60000", 10);
+const semaphore = new Semaphore(MAX_CONCURRENT);
+
+const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES ?? "3", 10);
+const RETRY_BASE_MS = parseInt(process.env.GEMINI_RETRY_BASE_MS ?? "1000", 10);
+
+function isRetryable(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("non-JSON output") ||
+    msg.includes("429") ||
+    msg.includes("ETIMEDOUT")
+  );
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxAttempts: number
+): Promise<{ result: T; retryCount: number }> {
+  let retryCount = 0;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return { result: await fn(), retryCount };
+    } catch (err) {
+      if (attempt === maxAttempts || !isRetryable(err)) {
+        if (err && typeof err === "object") {
+          (err as { retryCount?: number }).retryCount = retryCount;
+        }
+        throw err;
+      }
+      retryCount++;
+      const delay = Math.min(RETRY_BASE_MS * 2 ** (attempt - 1) + Math.random() * 500, 10_000);
+      process.stderr.write(
+        `[gemini-runner] retry ${attempt + 1}/${maxAttempts} after ${Math.round(delay)}ms (${(err as Error).message.slice(0, 60)})\n`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  throw new Error("unreachable");
+}
+
 export interface GeminiOptions {
   model?: string;
   cwd?: string;
+  tool?: string;
+  sessionId?: string;
 }
 
 /** Injectable executor type — override in tests to avoid spawning a real subprocess. */
@@ -75,7 +165,7 @@ function extractBalancedPath(raw: string): string {
       if (depth < 0) { end--; continue; }
       break;
     }
-    if (":!?".includes(ch)) { end--; continue; }
+    if (".:!?".includes(ch)) { end--; continue; }
     break;
   }
 
@@ -134,8 +224,8 @@ function escapeGlobSegments(rawPath: string): string {
  * (following symlinks) to a path outside `cwd`.
  */
 export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
-  const filePaths = extractFileRefs(prompt);
-  if (filePaths.length < 2) return prompt;
+  const fileRefs = extractFileRefs(prompt);
+  if (fileRefs.length < 2) return prompt;
 
   const cwdResolved = nodePath.resolve(cwd);
   let realCwd: string;
@@ -147,7 +237,7 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
 
   const sections: string[] = [];
 
-  for (const rawPath of filePaths) {
+  for (const rawPath of fileRefs) {
 
     let filePaths: string[];
     if (/[*?{]/.test(rawPath)) {
@@ -201,10 +291,23 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
     }
   }
 
+  // Mask @tokens in the prompt text to prevent double expansion by the CLI
+  // We use a replacement function with the same regex to ensure consistency.
+  GREEDY_AT_RE.lastIndex = 0;
+  const maskedPrompt = prompt.replace(GREEDY_AT_RE, (match, pathToken) => {
+    const balanced = extractBalancedPath(pathToken);
+    if (/[/.]/.test(balanced)) {
+      // Replace the matched token (including @) with just the balanced path.
+      // We keep the rest of the original token if any (punctuation that was trimmed).
+      return match.replace(`@${balanced}`, balanced);
+    }
+    return match;
+  });
+
   // Sentinel delimiters give the model a clear boundary for injected content.
   // The "Content from @<relPath>:" header preserves the original @token reference.
   const referenceBlock = `\n\n[REFERENCE_CONTENT_START]\n${sections.join("\n\n")}\n[REFERENCE_CONTENT_END]`;
-  return prompt + referenceBlock;
+  return maskedPrompt + referenceBlock;
 }
 
 /**
@@ -241,9 +344,10 @@ export async function runGemini(
   }
 
   // Expand multiple @file references ourselves; single @file still goes through CLI
-  const expandedPrompt = opts.cwd
-    ? await expandFileRefs(prompt, opts.cwd)
-    : prompt;
+  let expandedPrompt = prompt;
+  if (opts.cwd) {
+    expandedPrompt = await expandFileRefs(prompt, opts.cwd);
+  }
 
   const args: string[] = [
     "--yolo",
@@ -259,72 +363,141 @@ export async function runGemini(
   // Prompts above the threshold are written to a temp file and passed as @<path> so the
   // CLI reads from disk — completely bypasses the per-argument kernel limit.
   let tempPromptFile: string | null = null;
-  try {
-    if (expandedPrompt.length > LARGE_PROMPT_THRESHOLD) {
-      tempPromptFile = nodePath.join(
-        os.tmpdir(),
-        `gemini-prompt-${randomUUID()}.txt`
-      );
-      // mode 0o600: restrict to owner only — the expanded prompt can contain
-      // sensitive source code that must not be world-readable in /tmp.
-      await writeFile(tempPromptFile, expandedPrompt, { encoding: "utf8", mode: 0o600 });
-      // --include-directories lets the CLI read outside the project workspace (/tmp is
-      // outside any project cwd, so the workspace boundary check would otherwise reject it).
-      // This grants the CLI access to all files under os.tmpdir(), not just the prompt
-      // file. This is acceptable because expandFileRefs() has already inlined or rejected
-      // every @file reference — the CLI will not encounter further @-refs to resolve.
-      args.push(
-        "--include-directories",
-        os.tmpdir(),
-        "--prompt",
-        `@${tempPromptFile}`
-      );
-    } else {
-      args.push("--prompt", expandedPrompt);
-    }
+  const bypassUsed = expandedPrompt.length > LARGE_PROMPT_THRESHOLD;
+  if (bypassUsed) {
+    tempPromptFile = nodePath.join(
+      os.tmpdir(),
+      `gemini-prompt-${randomUUID()}.txt`
+    );
+    // mode 0o600: restrict to owner only — the expanded prompt can contain
+    // sensitive source code that must not be world-readable in /tmp.
+    await writeFile(tempPromptFile, expandedPrompt, { encoding: "utf8", mode: 0o600 });
+    // --include-directories lets the CLI read outside the project workspace (/tmp is
+    // outside any project cwd, so the workspace boundary check would otherwise reject it).
+    // This grants the CLI access to all files under os.tmpdir(), not just the prompt
+    // file. This is acceptable because expandFileRefs() has already inlined or rejected
+    // every @file reference — the CLI will not encounter further @-refs to resolve.
+    args.push(
+      "--include-directories",
+      os.tmpdir(),
+      "--prompt",
+      ` @${tempPromptFile}`
+    );
+  } else {
+    args.push("--prompt", expandedPrompt);
+  }
 
-    let stdout: string;
+  let acquired = false;
+  try {
+    await semaphore.acquire(QUEUE_TIMEOUT_MS);
+    acquired = true;
+    const startTime = Date.now();
+
+    let response: string;
+    let retryCount = 0;
+
     try {
-      const result = await executor(args, {
-        // Restrict inherited environment to only what Gemini CLI needs for auth
-        env: {
-          HOME: homeDir,
-          PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-        },
-        // Sets subprocess working directory. For single @file prompts the CLI resolves
-        // the path relative to this; for 2+ @file prompts expandFileRefs() has already
-        // inlined the content above, so the CLI no longer needs to resolve @file itself.
-        cwd: opts.cwd,
-        timeout: TIMEOUT_MS,
-        maxBuffer: 100 * 1024 * 1024, // 100 MB — large code-analysis responses can exceed 10 MB
-        // The Gemini CLI v0.32+ reads all stdin before processing --prompt when
-        // stdin is not a TTY (execFile always creates a pipe). Passing input:''
-        // writes an empty string to stdin and immediately closes it, giving the
-        // CLI an instant EOF so it doesn't block waiting for input.
-        input: "",
-      });
-      stdout = result.stdout;
-    } catch (err: unknown) {
-      // execFile throws on non-zero exit; include stderr in message if available
-      const execErr = err as { code?: string; stderr?: string; message?: string };
-      const detail = execErr.stderr?.trim() || execErr.message || String(err);
-      if (execErr.code === "ENOENT") {
-        throw new Error(
-          "gemini binary not found. Is the Gemini CLI installed and on PATH?",
-          { cause: err }
+      ({ result: response, retryCount } = await withRetry(async () => {
+        let stdout: string;
+        try {
+          const result = await executor(args, {
+            // Restrict inherited environment to only what Gemini CLI needs for auth
+            env: {
+              HOME: homeDir,
+              PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+            },
+            // Sets subprocess working directory. For single @file prompts the CLI resolves
+            // the path relative to this; for 2+ @file prompts expandFileRefs() has already
+            // inlined the content above, so the CLI no longer needs to resolve @file itself.
+            cwd: opts.cwd,
+            timeout: TIMEOUT_MS,
+            maxBuffer: 100 * 1024 * 1024, // 100 MB — large code-analysis responses can exceed 10 MB
+            // The Gemini CLI v0.32+ reads all stdin before processing --prompt when
+            // stdin is not a TTY (execFile always creates a pipe). Passing input:''
+            // writes an empty string to stdin and immediately closes it, giving the
+            // CLI an instant EOF so it doesn't block waiting for input.
+            input: "",
+          });
+          stdout = result.stdout;
+        } catch (err: unknown) {
+          // execFile throws on non-zero exit; include stderr in message if available
+          const execErr = err as { code?: string; stderr?: string; message?: string };
+          const detail = execErr.stderr?.trim() || execErr.message || String(err);
+          if (execErr.code === "ENOENT") {
+            throw new Error(
+              "gemini binary not found. Is the Gemini CLI installed and on PATH?",
+              { cause: err }
+            );
+          }
+          // Gemini CLI emits "Path not in workspace" for workspace boundary violations.
+          // If this hint stops appearing, check whether the CLI error wording has changed.
+          const workspaceHint = detail.includes("Path not in workspace")
+            ? " — pass cwd pointing to the project root containing your @file targets"
+            : "";
+          throw new Error(`gemini process failed: ${detail}${workspaceHint}`, { cause: err });
+        }
+
+        return parseGeminiOutput(stdout);
+      }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      // Sanitize telemetry: replace absolute home path with ~ to avoid leaking username
+      const telemetryError = errorMsg.replace(new RegExp(homeDir, "g"), "~");
+
+      const retryCountFromError =
+        typeof (err as { retryCount?: unknown }).retryCount === "number"
+          ? ((err as { retryCount: number }).retryCount ?? retryCount)
+          : retryCount;
+
+
+      if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
+        process.stderr.write(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            event: "gemini_request",
+            tool: opts.tool ?? null,
+            model: opts.model ?? "default",
+            promptBytes: expandedPrompt.length,
+            responseBytes: 0,
+            durationMs: Date.now() - startTime,
+            sessionId: opts.sessionId ?? null,
+            bypassUsed,
+            retryCount: retryCountFromError,
+            status: "error",
+            error: telemetryError,
+          }) + "\n"
         );
       }
-      // Gemini CLI emits "Path not in workspace" for workspace boundary violations.
-      // If this hint stops appearing, check whether the CLI error wording has changed.
-      const workspaceHint = detail.includes("Path not in workspace")
-        ? " — pass cwd pointing to the project root containing your @file targets"
-        : "";
-      throw new Error(`gemini process failed: ${detail}${workspaceHint}`, { cause: err });
+
+      throw err;
     }
 
-    return parseGeminiOutput(stdout);
+    if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
+      process.stderr.write(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          event: "gemini_request",
+          tool: opts.tool ?? null,
+          model: opts.model ?? "default",
+          promptBytes: expandedPrompt.length,
+          responseBytes: response.length,
+          durationMs: Date.now() - startTime,
+          sessionId: opts.sessionId ?? null,
+          bypassUsed,
+          retryCount,
+          status: "ok",
+          error: null,
+        }) + "\n"
+      );
+    }
+
+    return response;
   } finally {
-    // Always clean up the temp file — even if the executor or parseGeminiOutput throws.
+    if (acquired) {
+      semaphore.release();
+    }
+
+    // Always clean up the temp file — even if execution fails.
     if (tempPromptFile) {
       await unlink(tempPromptFile).catch((e) => {
         process.stderr.write(
