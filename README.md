@@ -59,7 +59,7 @@ A safe, auditable MCP server that wraps the official [`@google/gemini-cli`](http
 
 Add to `~/.claude/settings.json` for Claude Code CLI, or your host's MCP config file.
 
-> **Model compatibility note (Gemini CLI ≥ 0.31):** The CLI forces `include_thoughts` for models that support thinking. `gemini-2.0-flash` triggers a 400 error due to this. Use `gemini-2.5-flash-lite`, `gemini-2.5-pro`, or omit `model` to let the CLI pick its default.
+> **Model compatibility note (Gemini CLI ≥ 0.31):** The CLI forces `include_thoughts` for models that support thinking. `gemini-2.0-flash` triggers a 400 error due to this. Recommended: `gemini-3-flash-preview` (fast, default), `gemini-3.1-pro-preview` (deep reasoning), `gemini-3.1-flash-lite` (cost-efficient). `gemini-3-pro-preview` was shut down March 9 2026 — migrate away.
 
 ## Tools
 
@@ -68,7 +68,7 @@ Add to `~/.claude/settings.json` for Claude Code CLI, or your host's MCP config 
 ```
 Input:
   prompt   string   Required. The message to send.
-  model    string   Optional. E.g. "gemini-2.5-pro". Defaults to CLI default.
+  model    string   Optional. E.g. "gemini-3-flash-preview". Defaults to CLI default.
   cwd      string   Optional. Working directory — required for relative @file paths.
 
 Output:
