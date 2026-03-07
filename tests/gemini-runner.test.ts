@@ -249,20 +249,83 @@ describe("runGemini", () => {
     expect(capturedOpts.cwd).toBeUndefined();
   });
 
-  it("passes 60-second timeout to executor", async () => {
+  it("passes 300-second timeout to executor", async () => {
     const exec = makeExecutor(JSON.stringify({ response: "ok" }));
     await runGemini("hello", {}, exec);
 
     const capturedOpts = vi.mocked(exec).mock.calls[0][1];
-    expect(capturedOpts.timeout).toBe(60_000);
+    expect(capturedOpts.timeout).toBe(300_000);
   });
 
-  it("passes 10 MB maxBuffer to executor", async () => {
+  it("passes 100 MB maxBuffer to executor", async () => {
     const exec = makeExecutor(JSON.stringify({ response: "ok" }));
     await runGemini("hello", {}, exec);
 
     const capturedOpts = vi.mocked(exec).mock.calls[0][1];
-    expect(capturedOpts.maxBuffer).toBe(10 * 1024 * 1024);
+    expect(capturedOpts.maxBuffer).toBe(100 * 1024 * 1024);
+  });
+
+  it("passes prompt inline when it fits below LARGE_PROMPT_THRESHOLD", async () => {
+    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const smallPrompt = "A".repeat(100); // well below 110 KB threshold
+    await runGemini(smallPrompt, {}, exec);
+
+    const capturedArgs = vi.mocked(exec).mock.calls[0][0];
+    expect(capturedArgs).toContain("--prompt");
+    expect(capturedArgs[capturedArgs.indexOf("--prompt") + 1]).toBe(smallPrompt);
+    // No temp-file flags injected
+    expect(capturedArgs).not.toContain("--include-directories");
+  });
+
+  it("uses temp-file bypass for large prompts and cleans up afterward", async () => {
+    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    // Construct a prompt larger than LARGE_PROMPT_THRESHOLD (110 KB)
+    const largePrompt = "B".repeat(115 * 1024);
+    await runGemini(largePrompt, {}, exec);
+
+    const capturedArgs = vi.mocked(exec).mock.calls[0][0];
+    // Should have --include-directories pointing to tmpdir
+    expect(capturedArgs).toContain("--include-directories");
+    expect(capturedArgs[capturedArgs.indexOf("--include-directories") + 1]).toBe(os.tmpdir());
+    // --prompt should point to a temp file via @path
+    const promptIdx = capturedArgs.indexOf("--prompt");
+    expect(promptIdx).toBeGreaterThan(-1);
+    const promptArg = capturedArgs[promptIdx + 1];
+    expect(promptArg).toMatch(/^@.+gemini-prompt-.+\.txt$/);
+
+    // Temp file must be deleted after the call
+    const tempPath = promptArg.slice(1); // strip leading @
+    await expect(fs.access(tempPath)).rejects.toThrow();
+  });
+
+  it("uses temp-file bypass when model is also provided — correct arg count and ordering", async () => {
+    const exec = makeExecutor(JSON.stringify({ response: "ok" }));
+    const largePrompt = "D".repeat(115 * 1024);
+    await runGemini(largePrompt, { model: "gemini-2.5-pro" }, exec);
+
+    const capturedArgs = vi.mocked(exec).mock.calls[0][0];
+    // --yolo --output-format json --model <model> --include-directories <tmpdir> --prompt @<file>
+    expect(capturedArgs).toHaveLength(9);
+    expect(capturedArgs).toContain("--model");
+    expect(capturedArgs).toContain("gemini-2.5-pro");
+    expect(capturedArgs).toContain("--include-directories");
+    expect(capturedArgs[capturedArgs.indexOf("--prompt") + 1]).toMatch(
+      /^@.+gemini-prompt-.+\.txt$/
+    );
+  });
+
+  it("cleans up temp file even when the executor throws", async () => {
+    const exec = vi.fn().mockRejectedValue(
+      Object.assign(new Error("subprocess failed"), { code: "EACCES", stderr: "denied" })
+    ) as unknown as GeminiExecutor;
+    const largePrompt = "C".repeat(115 * 1024);
+
+    await expect(runGemini(largePrompt, {}, exec)).rejects.toThrow("gemini process failed");
+
+    const capturedArgs = vi.mocked(exec).mock.calls[0][0];
+    const promptArg = capturedArgs[capturedArgs.indexOf("--prompt") + 1];
+    const tempPath = promptArg.slice(1);
+    await expect(fs.access(tempPath)).rejects.toThrow();
   });
 
   it("fails fast when HOME is not set", async () => {
