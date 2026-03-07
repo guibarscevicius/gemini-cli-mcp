@@ -149,7 +149,7 @@ export interface GeminiOptions {
 /** Injectable executor type — override in tests to avoid spawning a real subprocess. */
 export type GeminiExecutor = (
   args: string[],
-  opts: { env: Record<string, string>; cwd?: string; timeout: number; maxBuffer: number },
+  opts: { env: Record<string, string>; cwd?: string; timeout: number },
   onChunk?: (text: string) => void
 ) => Promise<{ stdout: string }>;
 
@@ -251,7 +251,7 @@ export function spawnGemini(
 
   cp.on("error", (err) => {
     const detail = err.message;
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+    if ((err as { code?: string }).code === "ENOENT") {
       settle(() =>
         onError(
           new Error("gemini binary not found. Is the Gemini CLI installed and on PATH?", {
@@ -266,17 +266,18 @@ export function spawnGemini(
     }
   });
 
-  cp.on("close", (code) => {
+  cp.on("close", (code, signal) => {
     if (settled) return;
     if (code === 0) {
       // No result event received — treat accumulated as the response
       settle(() => onDone(accumulated));
     } else {
+      const reason = signal ? `signal ${signal}` : `code ${code}`;
       settle(() =>
         onError(
           new GeminiOutputError(
-            `gemini process exited with code ${code}`,
-            `gemini process exited with code ${code}`
+            `gemini process exited with ${reason}`,
+            `gemini process exited with ${reason}`
           )
         )
       );
@@ -606,7 +607,6 @@ export async function runGemini(
               // inlined the content above, so the CLI no longer needs to resolve @file itself.
               cwd: opts.cwd,
               timeout: TIMEOUT_MS,
-              maxBuffer: 100 * 1024 * 1024, // 100 MB — large code-analysis responses can exceed 10 MB
             },
             onChunk
           );
