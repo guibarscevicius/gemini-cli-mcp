@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { runGemini } from "../gemini-runner.js";
 import { sessionStore } from "../session-store.js";
+import * as jobStore from "../job-store.js";
+import type { ToolCallContext } from "../dispatcher.js";
+import { runGeminiAsync } from "./shared.js";
 
 export const AskGeminiSchema = z.object({
   prompt: z.string().min(1).describe("The prompt to send to Gemini"),
@@ -22,27 +24,42 @@ export const AskGeminiSchema = z.object({
 export type AskGeminiInput = z.infer<typeof AskGeminiSchema>;
 
 export interface AskGeminiOutput {
+  jobId: string;
   sessionId: string;
-  response: string;
 }
 
-/** Start a new Gemini session and persist the first user/assistant turn atomically. */
-export async function askGemini(input: unknown): Promise<AskGeminiOutput> {
+/** Start a new Gemini session. Returns immediately with { jobId, sessionId }; poll with gemini-poll. */
+export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Promise<AskGeminiOutput> {
   const { prompt, model, cwd } = AskGeminiSchema.parse(input);
 
-  const response = await runGemini(prompt, { model, cwd, tool: "ask-gemini" });
   const sessionId = randomUUID();
-  sessionStore.create(sessionId);
-  sessionStore.appendTurn(sessionId, "user", prompt);
-  sessionStore.appendTurn(sessionId, "assistant", response);
+  const jobId = randomUUID();
 
-  return { sessionId, response };
+  sessionStore.create(sessionId);
+  sessionStore.setPendingJob(sessionId, jobId);
+  jobStore.createJob(jobId);
+
+  // Fire-and-forget: background job
+  runGeminiAsync(jobId, prompt, { model, cwd, tool: "ask-gemini" }, ctx)
+    .then((response) => {
+      jobStore.completeJob(jobId, response);
+      sessionStore.appendTurn(sessionId, "user", prompt);
+      sessionStore.appendTurn(sessionId, "assistant", response);
+      sessionStore.clearPendingJob(sessionId);
+    })
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      jobStore.failJob(jobId, message);
+      sessionStore.clearPendingJob(sessionId);
+    });
+
+  return { jobId, sessionId };
 }
 
 export const askGeminiToolDefinition = {
   name: "ask-gemini" as const,
   description:
-    "Start a new conversation with Gemini. Returns a sessionId that can be passed to gemini-reply to continue the conversation.",
+    "Start a new conversation with Gemini. Returns immediately with { jobId, sessionId }. Poll with gemini-poll to get the response, or cancel with gemini-cancel.",
   inputSchema: {
     type: "object" as const,
     properties: {

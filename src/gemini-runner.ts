@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as nodePath from "node:path";
-import { promisify } from "node:util";
 import { escape as escapeGlob, glob } from "glob";
 
 export class GeminiOutputError extends Error {
@@ -12,8 +11,6 @@ export class GeminiOutputError extends Error {
     this.name = "GeminiOutputError";
   }
 }
-
-const execFileAsync = promisify(execFile);
 
 // 300 s - allows Gemini 2.5 Pro deep-reasoning tasks (can take 2–3 min before first token)
 const TIMEOUT_MS = 300_000;
@@ -93,7 +90,7 @@ if (CACHE_MAX_ENTRIES < 1 || !Number.isFinite(CACHE_MAX_ENTRIES)) {
 interface CacheEntry { response: string; expiresAt: number; }
 const cache = new Map<string, CacheEntry>();
 
-/** Clears all cached entries. Exposed for testing. */
+/** @internal Clears all cached entries. Exposed for test isolation only — not part of the public API. */
 export function clearCache(): void {
   cache.clear();
 }
@@ -105,8 +102,11 @@ function cacheKey(prompt: string, opts: GeminiOptions): string {
 }
 
 function isRetryable(err: unknown): boolean {
-  // GeminiOutputError covers all parse failures (non-JSON, unexpected shape, etc.)
+  // GeminiOutputError covers all parse failures (non-JSON, unexpected shape, etc.).
+  // Check by name as well as instanceof to support cross-module-reset scenarios in tests
+  // where vi.resetModules() produces a fresh class identity.
   if (err instanceof GeminiOutputError) return true;
+  if (err instanceof Error && err.name === "GeminiOutputError") return true;
   const msg = err instanceof Error ? err.message : String(err);
   return msg.includes("429") || msg.includes("ETIMEDOUT");
 }
@@ -149,11 +149,154 @@ export interface GeminiOptions {
 /** Injectable executor type — override in tests to avoid spawning a real subprocess. */
 export type GeminiExecutor = (
   args: string[],
-  opts: { env: Record<string, string>; cwd?: string; timeout: number; maxBuffer: number; input: string }
+  opts: { env: Record<string, string>; cwd?: string; timeout: number },
+  onChunk?: (text: string) => void
 ) => Promise<{ stdout: string }>;
 
-const defaultExecutor: GeminiExecutor = (args, opts) =>
-  execFileAsync("gemini", args, opts) as Promise<{ stdout: string }>;
+/**
+ * Spawn `gemini` with `--output-format stream-json` and parse NDJSON events.
+ *
+ * Parses `message` events (role=assistant, delta=true) into chunks, waits for
+ * a `result` event to signal completion, and handles error/process-level failures.
+ * Returns a `ChildProcess` so callers can store it for cancellation.
+ */
+export function spawnGemini(
+  args: string[],
+  spawnOpts: { env: Record<string, string>; cwd?: string; timeout: number },
+  onChunk: (text: string) => void,
+  onDone: (fullText: string) => void,
+  onError: (err: Error) => void
+): ChildProcess {
+  const cp = spawn("gemini", args, {
+    env: spawnOpts.env,
+    cwd: spawnOpts.cwd,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  // Close stdin immediately — Gemini CLI reads from --prompt, not stdin
+  cp.stdin?.end();
+
+  let accumulated = "";
+  let lineBuffer = "";
+  let settled = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  const settle = (fn: () => void) => {
+    if (settled) return;
+    settled = true;
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    fn();
+  };
+
+  timeoutHandle = setTimeout(() => {
+    cp.kill("SIGTERM");
+    settle(() =>
+      onError(new Error(`Gemini subprocess timed out after ${spawnOpts.timeout}ms`))
+    );
+  }, spawnOpts.timeout);
+
+  cp.stdout?.on("data", (data: Buffer) => {
+    lineBuffer += data.toString("utf8");
+    const lines = lineBuffer.split("\n");
+    lineBuffer = lines.pop() ?? "";
+
+    for (const raw of lines) {
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+
+      let event: unknown;
+      try {
+        event = JSON.parse(trimmed);
+      } catch {
+        // Non-JSON line (debug output etc.) — skip
+        continue;
+      }
+
+      type StreamEvent = {
+        type?: string;
+        role?: string;
+        content?: string;
+        delta?: boolean;
+        status?: string;
+        error?: unknown;
+        message?: string;
+      };
+      const e = event as StreamEvent;
+
+      if (e.type === "message" && e.role === "assistant" && typeof e.content === "string") {
+        accumulated += e.content;
+        onChunk(e.content);
+      } else if (e.type === "result") {
+        if (e.status === "success") {
+          settle(() => onDone(accumulated));
+        } else {
+          // status === "error"
+          const errDetail =
+            typeof e.error === "string"
+              ? e.error
+              : typeof e.message === "string"
+                ? e.message
+                : "gemini result error";
+          settle(() => onError(new GeminiOutputError(errDetail, errDetail)));
+        }
+      } else if (e.type === "error") {
+        const errDetail = typeof e.message === "string" ? e.message : "gemini error event";
+        settle(() => onError(new GeminiOutputError(errDetail, errDetail)));
+      }
+    }
+  });
+
+  // Drain stderr to prevent the subprocess from blocking on a full pipe
+  cp.stderr?.on("data", () => {});
+
+  cp.on("error", (err) => {
+    const detail = err.message;
+    if ((err as { code?: string }).code === "ENOENT") {
+      settle(() =>
+        onError(
+          new Error("gemini binary not found. Is the Gemini CLI installed and on PATH?", {
+            cause: err,
+          })
+        )
+      );
+    } else {
+      settle(() =>
+        onError(new Error(`gemini process error: ${detail}`, { cause: err }))
+      );
+    }
+  });
+
+  cp.on("close", (code, signal) => {
+    if (settled) return;
+    if (code === 0) {
+      // No result event received — treat accumulated as the response
+      settle(() => onDone(accumulated));
+    } else {
+      const reason = signal ? `signal ${signal}` : `code ${code}`;
+      settle(() =>
+        onError(
+          new GeminiOutputError(
+            `gemini process exited with ${reason}`,
+            `gemini process exited with ${reason}`
+          )
+        )
+      );
+    }
+  });
+
+  return cp;
+}
+
+const defaultExecutor: GeminiExecutor = (args, opts, onChunk) =>
+  new Promise<{ stdout: string }>((resolve, reject) => {
+    spawnGemini(
+      args,
+      { env: opts.env, cwd: opts.cwd, timeout: opts.timeout },
+      onChunk ?? (() => {}),
+      (fullText) => resolve({ stdout: fullText }),
+      reject
+    );
+  });
 
 /**
  * Two-phase @file extraction (greedy regex → balanced-delimiter state machine).
@@ -362,7 +505,8 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
 export async function runGemini(
   prompt: string,
   opts: GeminiOptions = {},
-  executor: GeminiExecutor = defaultExecutor
+  executor: GeminiExecutor = defaultExecutor,
+  onChunk?: (text: string) => void
 ): Promise<string> {
   const homeDir = process.env.HOME;
   if (!homeDir) {
@@ -389,8 +533,10 @@ export async function runGemini(
   // Note: single-@file prompts use the file path (not content) in the key — if the
   // file changes, a stale response may be served until TTL expires.
   const isCacheable = CACHE_TTL_MS > 0 && !opts.sessionId;
+  // Compute key once here and reuse at the store site — avoids a second SHA-256
+  // over a potentially large expandedPrompt.
+  const key = isCacheable ? cacheKey(expandedPrompt, opts) : "";
   if (isCacheable) {
-    const key = cacheKey(expandedPrompt, opts);
     const cached = cache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.response;
@@ -400,7 +546,7 @@ export async function runGemini(
   const args: string[] = [
     "--yolo",
     "--output-format",
-    "json",
+    "stream-json",
   ];
 
   if (opts.model) {
@@ -448,44 +594,54 @@ export async function runGemini(
       ({ result: response, retryCount } = await withRetry(async () => {
         let stdout: string;
         try {
-          const result = await executor(args, {
-            // Restrict inherited environment to only what Gemini CLI needs for auth
-            env: {
-              HOME: homeDir,
-              PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+          const result = await executor(
+            args,
+            {
+              // Restrict inherited environment to only what Gemini CLI needs for auth
+              env: {
+                HOME: homeDir,
+                PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+              },
+              // Sets subprocess working directory. For single @file prompts the CLI resolves
+              // the path relative to this; for 2+ @file prompts expandFileRefs() has already
+              // inlined the content above, so the CLI no longer needs to resolve @file itself.
+              cwd: opts.cwd,
+              timeout: TIMEOUT_MS,
             },
-            // Sets subprocess working directory. For single @file prompts the CLI resolves
-            // the path relative to this; for 2+ @file prompts expandFileRefs() has already
-            // inlined the content above, so the CLI no longer needs to resolve @file itself.
-            cwd: opts.cwd,
-            timeout: TIMEOUT_MS,
-            maxBuffer: 100 * 1024 * 1024, // 100 MB — large code-analysis responses can exceed 10 MB
-            // The Gemini CLI v0.32+ reads all stdin before processing --prompt when
-            // stdin is not a TTY (execFile always creates a pipe). Passing input:''
-            // writes an empty string to stdin and immediately closes it, giving the
-            // CLI an instant EOF so it doesn't block waiting for input.
-            input: "",
-          });
+            onChunk
+          );
           stdout = result.stdout;
         } catch (err: unknown) {
-          // execFile throws on non-zero exit; include stderr in message if available
+          // GeminiOutputError (from spawnGemini's NDJSON parser or test mocks): re-throw as-is.
+          if (err instanceof GeminiOutputError) throw err;
+
           const execErr = err as { code?: string; stderr?: string; message?: string };
-          const detail = execErr.stderr?.trim() || execErr.message || String(err);
+
+          // ENOENT: gemini binary not on PATH.
           if (execErr.code === "ENOENT") {
             throw new Error(
               "gemini binary not found. Is the Gemini CLI installed and on PATH?",
               { cause: err }
             );
           }
-          // Gemini CLI emits "Path not in workspace" for workspace boundary violations.
-          // If this hint stops appearing, check whether the CLI error wording has changed.
-          const workspaceHint = detail.includes("Path not in workspace")
-            ? " — pass cwd pointing to the project root containing your @file targets"
-            : "";
-          throw new Error(`gemini process failed: ${detail}${workspaceHint}`, { cause: err });
+
+          // Errors with a `stderr` property are old-style execFile errors (or test mocks).
+          // Errors from spawnGemini are already properly formatted Error instances without `stderr`.
+          // Re-wrap if `stderr` present; otherwise pass through.
+          if (execErr.stderr !== undefined) {
+            const detail = execErr.stderr.trim() || execErr.message || String(err);
+            const workspaceHint = detail.includes("Path not in workspace")
+              ? " — pass cwd pointing to the project root containing your @file targets"
+              : "";
+            throw new Error(`gemini process failed: ${detail}${workspaceHint}`, { cause: err });
+          }
+
+          // Already-formatted errors from spawnGemini or other sources: re-throw.
+          throw err;
         }
 
-        return parseGeminiOutput(stdout);
+        // executor returns accumulated response text directly (parsed from stream-json)
+        return stdout;
       }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
     } catch (err) {
       const homeDir = process.env.HOME ?? "";
@@ -554,7 +710,6 @@ export async function runGemini(
 
     // Store result in cache before returning
     if (isCacheable) {
-      const key = cacheKey(expandedPrompt, opts);
       if (cache.size >= CACHE_MAX_ENTRIES) {
         // FIFO eviction: delete the oldest-inserted entry
         const oldest = cache.keys().next().value;
