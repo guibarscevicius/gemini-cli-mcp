@@ -38,6 +38,10 @@ export class SessionStore {
 
     this.gcTimer = setInterval(() => {
       const cutoff = Date.now() - ttlMs;
+      const expiredRows = this.db.prepare("SELECT id FROM sessions WHERE last_accessed < ?").all(cutoff) as { id: string }[];
+      for (const row of expiredRows) {
+        this.pendingJobs.delete(row.id);
+      }
       this.db.prepare("DELETE FROM sessions WHERE last_accessed < ?").run(cutoff);
     }, gcIntervalMs);
 

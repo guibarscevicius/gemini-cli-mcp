@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { runGemini, spawnGemini, type GeminiExecutor } from "../gemini-runner.js";
 import { sessionStore } from "../session-store.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
+import { runGeminiAsync } from "./shared.js";
 
 export const GeminiReplySchema = z.object({
   sessionId: z.string().uuid().describe("Session ID returned by ask-gemini"),
@@ -27,48 +27,6 @@ export type GeminiReplyInput = z.infer<typeof GeminiReplySchema>;
 
 export interface GeminiReplyOutput {
   jobId: string;
-}
-
-async function runGeminiAsync(
-  jobId: string,
-  prompt: string,
-  opts: { model?: string; cwd?: string; tool: string; sessionId?: string },
-  ctx: ToolCallContext
-): Promise<string> {
-  const job = jobStore.getJob(jobId)!;
-
-  const onChunk = (chunk: string) => {
-    jobStore.appendChunk(jobId, chunk);
-    if (ctx.progressToken !== undefined && ctx.sendNotification) {
-      ctx.sendNotification({
-        method: "notifications/progress",
-        params: {
-          progressToken: ctx.progressToken,
-          progress: job.partialResponse.length,
-          total: undefined,
-        },
-      }).catch(() => {});
-    }
-  };
-
-  const executor: GeminiExecutor = (args, execOpts, chunkCb) =>
-    new Promise((resolve, reject) => {
-      const cp = spawnGemini(
-        args,
-        { env: execOpts.env, cwd: execOpts.cwd, timeout: execOpts.timeout },
-        chunkCb ?? (() => {}),
-        (fullText) => resolve({ stdout: fullText }),
-        reject
-      );
-      job.subprocess = cp;
-    });
-
-  try {
-    const response = await runGemini(prompt, opts, executor, onChunk);
-    return response;
-  } finally {
-    job.subprocess = undefined;
-  }
 }
 
 /**

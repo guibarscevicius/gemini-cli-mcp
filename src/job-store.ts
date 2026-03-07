@@ -37,7 +37,7 @@ export function appendChunk(jobId: string, chunk: string): void {
 
 export function completeJob(jobId: string, response: string): void {
   const job = jobs.get(jobId);
-  if (job) {
+  if (job && job.status !== "cancelled") {
     job.status = "done";
     job.response = response;
     job.subprocess = undefined;
@@ -46,7 +46,7 @@ export function completeJob(jobId: string, response: string): void {
 
 export function failJob(jobId: string, error: string): void {
   const job = jobs.get(jobId);
-  if (job) {
+  if (job && job.status !== "cancelled") {
     job.status = "error";
     job.error = error;
     job.subprocess = undefined;
