@@ -579,6 +579,13 @@ describe("runGemini concurrency", () => {
     expect(secondResult).toBe("second");
     expect(order).toEqual(["start-1", "end-1", "start-2", "end-2"]);
   });
+
+
+  it("throws at import when GEMINI_MAX_CONCURRENT=0", async () => {
+    await expect(
+      loadRunnerWithEnv({ GEMINI_MAX_CONCURRENT: "0" })
+    ).rejects.toThrow("GEMINI_MAX_CONCURRENT must be a positive integer");
+  });
 });
 
 describe("runGemini telemetry", () => {
@@ -624,6 +631,31 @@ describe("runGemini telemetry", () => {
     expect(payload.event).toBe("gemini_request");
     expect(payload.status).toBe("error");
     expect(payload.tool).toBe("gemini-reply");
+  });
+
+
+  it("telemetry error field uses sanitized message, not raw Gemini output", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_STRUCTURED_LOGS: "1",
+      GEMINI_MAX_RETRIES: "0",
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const rawOutput = "RAWRAWRAW".repeat(50); // 450 chars — would appear in telemetry if unsanitized
+    const exec = vi.fn().mockResolvedValue({ stdout: rawOutput });
+
+    await expect(
+      freshRunGemini("hello", {}, exec as unknown as GeminiExecutor)
+    ).rejects.toThrow("gemini returned non-JSON output");
+
+    const logLine = stderrSpy.mock.calls
+      .map(([line]) => String(line))
+      .find((line) => line.includes('"event":"gemini_request"'));
+    expect(logLine).toBeDefined();
+    const payload = JSON.parse(logLine as string) as Record<string, unknown>;
+
+    expect(payload.status).toBe("error");
+    expect(payload.error).toBe("gemini returned non-JSON output"); // sanitized message
+    expect(String(payload.error)).not.toContain("RAWRAWRAW"); // raw output excluded
   });
 });
 
