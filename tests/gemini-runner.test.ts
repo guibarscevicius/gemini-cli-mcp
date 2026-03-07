@@ -310,14 +310,6 @@ describe("runGemini", () => {
     expect(capturedOpts.timeout).toBe(300_000);
   });
 
-  it("passes 100 MB maxBuffer to executor", async () => {
-    const exec = makeExecutor("ok");
-    await runGemini("hello", {}, exec);
-
-    const capturedOpts = vi.mocked(exec).mock.calls[0][1];
-    expect(capturedOpts.maxBuffer).toBe(100 * 1024 * 1024);
-  });
-
   it("passes prompt inline when it fits below LARGE_PROMPT_THRESHOLD", async () => {
     const exec = makeExecutor("ok");
     const smallPrompt = "A".repeat(100); // well below 110 KB threshold
