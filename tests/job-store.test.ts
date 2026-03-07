@@ -76,6 +76,13 @@ describe("completeJob", () => {
   it("does nothing for unknown jobId", () => {
     completeJob("nope", "answer"); // no throw
   });
+
+  it("completeJob resolves the completion promise", async () => {
+    createJob("j3-resolve");
+    const completion = getJob("j3-resolve")!.completion;
+    completeJob("j3-resolve", "resolved response");
+    await expect(completion).resolves.toBe("resolved response");
+  });
 });
 
 describe("failJob", () => {
@@ -91,6 +98,13 @@ describe("failJob", () => {
   it("does nothing for unknown jobId", () => {
     failJob("nope", "err"); // no throw
   });
+
+  it("failJob rejects the completion promise", async () => {
+    createJob("j4-reject");
+    const completion = getJob("j4-reject")!.completion;
+    failJob("j4-reject", "some failure");
+    await expect(completion).rejects.toThrow("some failure");
+  });
 });
 
 describe("cancelJob", () => {
@@ -104,6 +118,13 @@ describe("cancelJob", () => {
 
   it("does nothing for unknown jobId", () => {
     cancelJob("nope"); // no throw
+  });
+
+  it('cancelJob rejects the completion promise with "Job was cancelled"', async () => {
+    createJob("j5-cancel");
+    const completion = getJob("j5-cancel")!.completion;
+    cancelJob("j5-cancel");
+    await expect(completion).rejects.toThrow("Job was cancelled");
   });
 });
 

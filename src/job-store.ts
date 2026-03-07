@@ -9,18 +9,35 @@ export interface Job {
   error?: string;           // set when status → "error"
   subprocess?: ChildProcess; // for cancel (cleared on completion)
   createdAt: number;
+  readonly completion: Promise<string>;
 }
 
 const JOB_TTL_MS = parseInt(process.env.GEMINI_JOB_TTL_MS ?? "300000", 10);
 const JOB_GC_MS = parseInt(process.env.GEMINI_JOB_GC_MS ?? "60000", 10);
 
-const jobs = new Map<string, Job>();
+interface JobInternal extends Job {
+  _resolve: (response: string) => void;
+  _reject: (error: Error) => void;
+}
+
+const jobs = new Map<string, JobInternal>();
 
 export function createJob(jobId: string): void {
+  let resolveCompletion!: (response: string) => void;
+  let rejectCompletion!: (error: Error) => void;
+  const completion = new Promise<string>((resolve, reject) => {
+    resolveCompletion = resolve;
+    rejectCompletion = reject;
+  });
+  completion.catch(() => {});
+
   jobs.set(jobId, {
     status: "pending",
     partialResponse: "",
     createdAt: Date.now(),
+    completion,
+    _resolve: resolveCompletion,
+    _reject: rejectCompletion,
   });
 }
 
@@ -41,6 +58,7 @@ export function completeJob(jobId: string, response: string): void {
     job.status = "done";
     job.response = response;
     job.subprocess = undefined;
+    job._resolve(response);
   }
 }
 
@@ -50,6 +68,7 @@ export function failJob(jobId: string, error: string): void {
     job.status = "error";
     job.error = error;
     job.subprocess = undefined;
+    job._reject(new Error(error));
   }
 }
 
@@ -58,6 +77,7 @@ export function cancelJob(jobId: string): void {
   if (job) {
     job.status = "cancelled";
     job.subprocess = undefined;
+    job._reject(new Error("Job was cancelled"));
   }
 }
 

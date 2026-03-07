@@ -5,6 +5,7 @@ import { sessionStore } from "../session-store.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
 import { runGeminiAsync } from "./shared.js";
+import { registerRequest, unregisterRequest } from "../request-map.js";
 
 export const GeminiReplySchema = z.object({
   sessionId: z.string().uuid().describe("Session ID returned by ask-gemini"),
@@ -27,6 +28,7 @@ export type GeminiReplyInput = z.infer<typeof GeminiReplySchema>;
 
 export interface GeminiReplyOutput {
   jobId: string;
+  pollIntervalMs: number;
 }
 
 /**
@@ -55,6 +57,9 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
   const jobId = randomUUID();
   sessionStore.setPendingJob(sessionId, jobId);
   jobStore.createJob(jobId);
+  if (ctx.requestId !== undefined) {
+    registerRequest(ctx.requestId, jobId);
+  }
 
   // Prepend conversation history so Gemini has full context
   const history = sessionStore.formatHistory(sessionId);
@@ -67,14 +72,16 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
       sessionStore.appendTurn(sessionId, "user", prompt);
       sessionStore.appendTurn(sessionId, "assistant", response);
       sessionStore.clearPendingJob(sessionId);
+      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       jobStore.failJob(jobId, message);
       sessionStore.clearPendingJob(sessionId);
+      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
     });
 
-  return { jobId };
+  return { jobId, pollIntervalMs: 2000 };
 }
 
 export const geminiReplyToolDefinition = {

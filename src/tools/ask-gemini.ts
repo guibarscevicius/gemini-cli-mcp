@@ -1,9 +1,11 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { sessionStore } from "../session-store.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
 import { runGeminiAsync } from "./shared.js";
+import { registerRequest, unregisterRequest } from "../request-map.js";
 
 export const AskGeminiSchema = z.object({
   prompt: z.string().min(1).describe("The prompt to send to Gemini"),
@@ -19,6 +21,16 @@ export const AskGeminiSchema = z.object({
     .describe(
       "Working directory for the Gemini subprocess. Required for any @file path — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected."
     ),
+  wait: z
+    .boolean()
+    .optional()
+    .describe("If true, block until done and return the response directly (default: false)"),
+  waitTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Timeout for wait mode in ms (default 90000). Falls back to async on timeout."),
 });
 
 export type AskGeminiInput = z.infer<typeof AskGeminiSchema>;
@@ -26,11 +38,13 @@ export type AskGeminiInput = z.infer<typeof AskGeminiSchema>;
 export interface AskGeminiOutput {
   jobId: string;
   sessionId: string;
+  pollIntervalMs: number;
+  response?: string;
 }
 
 /** Start a new Gemini session. Returns immediately with { jobId, sessionId }; poll with gemini-poll. */
 export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Promise<AskGeminiOutput> {
-  const { prompt, model, cwd } = AskGeminiSchema.parse(input);
+  const { prompt, model, cwd, wait, waitTimeoutMs } = AskGeminiSchema.parse(input);
 
   const sessionId = randomUUID();
   const jobId = randomUUID();
@@ -38,6 +52,9 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
   sessionStore.create(sessionId);
   sessionStore.setPendingJob(sessionId, jobId);
   jobStore.createJob(jobId);
+  if (ctx.requestId !== undefined) {
+    registerRequest(ctx.requestId, jobId);
+  }
 
   // Fire-and-forget: background job
   runGeminiAsync(jobId, prompt, { model, cwd, tool: "ask-gemini" }, ctx)
@@ -46,14 +63,32 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
       sessionStore.appendTurn(sessionId, "user", prompt);
       sessionStore.appendTurn(sessionId, "assistant", response);
       sessionStore.clearPendingJob(sessionId);
+      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       jobStore.failJob(jobId, message);
       sessionStore.clearPendingJob(sessionId);
+      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
     });
 
-  return { jobId, sessionId };
+  if (wait === true) {
+    const job = jobStore.getJob(jobId)!;
+    const ms = waitTimeoutMs ?? 90_000;
+    const timer = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), ms));
+    try {
+      const response = await Promise.race([job.completion, timer]);
+      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
+      return { jobId, sessionId, response, pollIntervalMs: 2000 };
+    } catch (err) {
+      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
+      if (err instanceof Error && err.message === "timeout") {
+        return { jobId, sessionId, pollIntervalMs: 2000 };
+      }
+      throw new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
+    }
+  }
+  return { jobId, sessionId, pollIntervalMs: 2000 };
 }
 
 export const askGeminiToolDefinition = {
@@ -76,6 +111,16 @@ export const askGeminiToolDefinition = {
         type: "string",
         description:
           "Working directory for the subprocess. Required for any @file path (relative or absolute) — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected.",
+      },
+      wait: {
+        type: "boolean",
+        description:
+          "If true, block until done and return the response directly (default: false)",
+      },
+      waitTimeoutMs: {
+        type: "number",
+        description:
+          "Timeout for wait mode in ms (default 90000). Falls back to async on timeout.",
       },
     },
     required: ["prompt"],

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError } from "zod";
 
 // Module mocks must be declared before imports
@@ -47,17 +48,24 @@ beforeEach(() => {
     status: "pending",
     partialResponse: "",
     createdAt: Date.now(),
+    completion: new Promise<string>(() => {}),
   });
 });
 
 describe("askGemini", () => {
   // ── Return shape ────────────────────────────────────────────────────────────
 
-  it("returns { jobId, sessionId } immediately (no response field)", async () => {
+  it("returns { jobId, sessionId, pollIntervalMs } immediately (no response field)", async () => {
     const result = await askGemini({ prompt: "hello" });
     expect(result).toHaveProperty("jobId");
     expect(result).toHaveProperty("sessionId");
+    expect(result.pollIntervalMs).toBe(2000);
     expect(result).not.toHaveProperty("response");
+  });
+
+  it("pollIntervalMs is 2000 in async response", async () => {
+    const result = await askGemini({ prompt: "hello" });
+    expect(result.pollIntervalMs).toBe(2000);
   });
 
   it("jobId is a UUID", async () => {
@@ -192,5 +200,54 @@ describe("askGemini", () => {
       jobId: expect.any(String),
       sessionId: expect.any(String),
     });
+  });
+
+  it("wait: true returns response directly when job completes", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("waited response"),
+    });
+    const result = await askGemini({ prompt: "hello", wait: true });
+    expect(result).toMatchObject({
+      jobId: expect.any(String),
+      sessionId: expect.any(String),
+      response: "waited response",
+      pollIntervalMs: 2000,
+    });
+  });
+
+  it("wait: true with timeout falls back to async", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: new Promise<string>(() => {}),
+    });
+    const result = await askGemini({ prompt: "hello", wait: true, waitTimeoutMs: 1 });
+    expect(result).toMatchObject({
+      jobId: expect.any(String),
+      sessionId: expect.any(String),
+      pollIntervalMs: 2000,
+    });
+    expect(result).not.toHaveProperty("response");
+  });
+
+  it("wait: true throws McpError when job fails", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.reject(new Error("job failed")),
+    });
+    try {
+      await askGemini({ prompt: "hello", wait: true });
+      expect.fail("should have thrown");
+    } catch (err: unknown) {
+      const e = err as { code?: number; message?: string };
+      expect(e.code).toBe(ErrorCode.InternalError);
+      expect(e.message).toContain("job failed");
+    }
   });
 });

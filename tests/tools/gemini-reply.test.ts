@@ -50,16 +50,23 @@ beforeEach(() => {
     status: "pending",
     partialResponse: "",
     createdAt: Date.now(),
+    completion: new Promise<string>(() => {}),
   });
 });
 
 describe("geminiReply", () => {
   // ── Return shape ─────────────────────────────────────────────────────────────
 
-  it("returns { jobId } immediately (no response field)", async () => {
+  it("returns { jobId, pollIntervalMs } immediately (no response field)", async () => {
     const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "follow up" });
     expect(result).toHaveProperty("jobId");
+    expect(result.pollIntervalMs).toBe(2000);
     expect(result).not.toHaveProperty("response");
+  });
+
+  it("pollIntervalMs is 2000 in response", async () => {
+    const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" });
+    expect(result.pollIntervalMs).toBe(2000);
   });
 
   it("jobId is a UUID", async () => {

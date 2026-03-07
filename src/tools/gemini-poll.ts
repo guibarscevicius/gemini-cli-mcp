@@ -33,7 +33,7 @@ export async function geminiPoll(input: unknown): Promise<GeminiPollOutput> {
 export const geminiPollToolDefinition = {
   name: "gemini-poll" as const,
   description:
-    "Poll the status of an async Gemini job started by ask-gemini or gemini-reply. Returns status, partial response (while pending), or the full response (when done).",
+    "Poll the status of an async Gemini job started by ask-gemini or gemini-reply. Returns status, partial response (while pending), or the full response (when done). Recommended poll interval: 2000ms. Jobs typically complete in 16–20s.",
   inputSchema: {
     type: "object" as const,
     properties: {
