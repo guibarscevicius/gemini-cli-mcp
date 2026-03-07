@@ -652,7 +652,7 @@ describe("expandFileRefs", () => {
     }
   });
 
-  it("expands two @file tokens: keeps @tokens in text and appends REFERENCE block", async () => {
+  it("expands two @file tokens: masks @tokens in prompt text and appends REFERENCE block", async () => {
     const dir = await makeTmpDir({
       "a.ts": "const a = 1;",
       "b.ts": "const b = 2;",
@@ -661,8 +661,9 @@ describe("expandFileRefs", () => {
       const prompt = "Compare @a.ts and @b.ts";
       const result = await expandFileRefs(prompt, dir);
 
-      // Original prompt text is unchanged
-      expect(result).toContain("Compare @a.ts and @b.ts");
+      // @tokens are masked (@ stripped) to prevent the Gemini CLI from re-expanding them
+      expect(result).toContain("Compare a.ts and b.ts");
+      expect(result).not.toContain("@a.ts and @b.ts");
       // REFERENCE block is appended
       expect(result).toContain("[REFERENCE_CONTENT_START]");
       expect(result).toContain("[REFERENCE_CONTENT_END]");

@@ -6,6 +6,13 @@ import * as nodePath from "node:path";
 import { promisify } from "node:util";
 import { escape as escapeGlob, glob } from "glob";
 
+export class GeminiOutputError extends Error {
+  constructor(message: string, public sanitizedMessage: string) {
+    super(message);
+    this.name = "GeminiOutputError";
+  }
+}
+
 const execFileAsync = promisify(execFile);
 
 // 300 s - allows Gemini 2.5 Pro deep-reasoning tasks (can take 2–3 min before first token)
@@ -55,12 +62,19 @@ class Semaphore {
   }
 
   release(): void {
+    if (this.running <= 0) return; // defensive: should never be called without a matching acquire
     this.running--;
     this.queue.shift()?.();
   }
 }
 
 const MAX_CONCURRENT = parseInt(process.env.GEMINI_MAX_CONCURRENT ?? "2", 10);
+if (!Number.isFinite(MAX_CONCURRENT) || MAX_CONCURRENT < 1) {
+  throw new Error(
+    `GEMINI_MAX_CONCURRENT must be a positive integer, got "${process.env.GEMINI_MAX_CONCURRENT}". ` +
+      "Use 1 for strict serialization or omit to use the default (2)."
+  );
+}
 const QUEUE_TIMEOUT_MS = parseInt(process.env.GEMINI_QUEUE_TIMEOUT_MS ?? "60000", 10);
 const semaphore = new Semaphore(MAX_CONCURRENT);
 
@@ -68,12 +82,10 @@ const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES ?? "3", 10);
 const RETRY_BASE_MS = parseInt(process.env.GEMINI_RETRY_BASE_MS ?? "1000", 10);
 
 function isRetryable(err: unknown): boolean {
+  // GeminiOutputError covers all parse failures (non-JSON, unexpected shape, etc.)
+  if (err instanceof GeminiOutputError) return true;
   const msg = err instanceof Error ? err.message : String(err);
-  return (
-    msg.includes("non-JSON output") ||
-    msg.includes("429") ||
-    msg.includes("ETIMEDOUT")
-  );
+  return msg.includes("429") || msg.includes("ETIMEDOUT");
 }
 
 async function withRetry<T>(
@@ -216,9 +228,10 @@ function escapeGlobSegments(rawPath: string): string {
  * REFERENCE block. Single @file tokens are left untouched so the CLI handles
  * them natively (workspace boundary enforcement, etc.).
  *
- * The original @token text is preserved in the prompt; file contents are
- * appended in a `[REFERENCE_CONTENT_START] ... [REFERENCE_CONTENT_END]` block
- * and are NOT inlined at the token position.
+ * @tokens in the prompt are masked (@ stripped) after expansion to prevent the
+ * Gemini CLI from re-expanding them; file contents are appended in a
+ * `[REFERENCE_CONTENT_START] ... [REFERENCE_CONTENT_END]` block and are NOT
+ * inlined at the token position.
  *
  * Throws if any referenced file is not found, is a directory, or resolves
  * (following symlinks) to a path outside `cwd`.
@@ -381,7 +394,7 @@ export async function runGemini(
       "--include-directories",
       os.tmpdir(),
       "--prompt",
-      ` @${tempPromptFile}`
+      `@${tempPromptFile}`
     );
   } else {
     args.push("--prompt", expandedPrompt);
@@ -440,9 +453,22 @@ export async function runGemini(
         return parseGeminiOutput(stdout);
       }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      // Sanitize telemetry: replace absolute home path with ~ to avoid leaking username
-      const telemetryError = errorMsg.replace(new RegExp(homeDir, "g"), "~");
+      const homeDir = process.env.HOME ?? "";
+      let telemetryError: string;
+      if (err instanceof GeminiOutputError) {
+        telemetryError = err.sanitizedMessage;
+      } else if (err instanceof Error) {
+        telemetryError = err.message;
+      } else {
+        telemetryError = String(err);
+      }
+
+      // Sanitize telemetry: replace absolute home path with ~ to avoid leaking username.
+      // Use split/join instead of new RegExp(homeDir) — homeDir may contain regex
+      // metacharacters (e.g. /home/user.name) that would corrupt the pattern.
+      if (homeDir) {
+        telemetryError = telemetryError.split(homeDir).join("~");
+      }
 
       const retryCountFromError =
         typeof (err as { retryCount?: unknown }).retryCount === "number"
@@ -529,14 +555,16 @@ export function parseGeminiOutput(raw: string): string {
   } catch {
     // If JSON parse fails, the raw stdout shape is unknown — surface it clearly
     // so the caller (and developer) can see it and update field names.
-    throw new Error(
-      `gemini returned non-JSON output. Raw stdout:\n${raw.slice(0, 2000)}`
+    throw new GeminiOutputError(
+      `gemini returned non-JSON output. Raw stdout:\n${raw.slice(0, 2000)}`,
+      "gemini returned non-JSON output"
     );
   }
 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(
-      `gemini process returned unexpected JSON shape (${typeof parsed}): ${raw.slice(0, 200)}`
+    throw new GeminiOutputError(
+      `gemini process returned unexpected JSON shape (${typeof parsed}): ${raw.slice(0, 200)}`,
+      "gemini process returned unexpected JSON shape"
     );
   }
 
@@ -558,7 +586,8 @@ export function parseGeminiOutput(raw: string): string {
   }
 
   // Unknown shape — dump it so the developer can add the correct field name
-  throw new Error(
-    `gemini JSON output has unexpected shape. Parsed object:\n${JSON.stringify(output, null, 2)}`
+  throw new GeminiOutputError(
+    `gemini JSON output has unexpected shape. Parsed object:\n${JSON.stringify(output, null, 2)}`,
+    "gemini JSON output has unexpected shape"
   );
 }

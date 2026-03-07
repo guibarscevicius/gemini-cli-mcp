@@ -44,7 +44,7 @@ export class SessionStore {
 
   create(id: string): void {
     this.db
-      .prepare("INSERT OR REPLACE INTO sessions (id, turns, last_accessed) VALUES (?, ?, ?)")
+      .prepare("INSERT OR IGNORE INTO sessions (id, turns, last_accessed) VALUES (?, ?, ?)")
       .run(id, JSON.stringify([]), Date.now());
   }
 
@@ -59,7 +59,10 @@ export class SessionStore {
     const row = this.db.prepare("SELECT turns FROM sessions WHERE id = ?").get(id) as
       | { turns: string }
       | undefined;
-    if (!row) return;
+    if (!row) {
+      process.stderr.write(`[gemini-cli-mcp] appendTurn: session ${id} not found — turn dropped\n`);
+      return;
+    }
     const turns: Turn[] = JSON.parse(row.turns);
     turns.push({ role, content });
     this.db
