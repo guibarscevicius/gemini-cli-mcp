@@ -1451,12 +1451,13 @@ describe("SemaphoreTimeoutError typed class", () => {
     }
   });
 
-  it("SemaphoreTimeoutError has correct name and message", async () => {
+  it("SemaphoreTimeoutError has correct name, message and class identity", async () => {
     const { SemaphoreTimeoutError } = await import("../src/gemini-runner.js");
     const err = new SemaphoreTimeoutError(5000);
     expect(err.name).toBe("SemaphoreTimeoutError");
     expect(err.message).toContain("5000ms");
     expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(SemaphoreTimeoutError);
   });
 });
 

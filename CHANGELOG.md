@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Session store migrated from in-memory to **SQLite** (`node:sqlite`). Sessions now survive server restarts. Configure path via `GEMINI_SESSION_DB` (default: `~/.gemini-cli-mcp/sessions.db`).
+- Output format switched from `--output-format json` to `--output-format stream-json` for real-time NDJSON streaming and partial response support.
 - `ask-gemini` output shape extended: now returns `jobId`, `sessionId`, `pollIntervalMs` (async mode) or `response` (blocking mode) or `partialResponse` + `timedOut` (timeout mode).
 - `gemini-reply` output extended to match: includes `jobId` and `pollIntervalMs`.
 

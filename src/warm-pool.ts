@@ -109,7 +109,15 @@ export class WarmProcessPool {
                 `[gemini-cli-mcp] warm pool: gemini binary not found — ` +
                 `pool disabled after ${WarmProcessPool.MAX_CONSECUTIVE_FAILURES} consecutive failures\n`
               );
-              return; // stop replenishing
+              // Reject any waiters that would otherwise hang indefinitely, then
+              // permanently disable the pool so future acquire() calls fail fast.
+              this.draining = true;
+              for (const waiter of this.waiters) {
+                if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+                waiter.reject(new Error("Gemini process pool disabled: gemini binary not found"));
+              }
+              this.waiters.length = 0;
+              return;
             }
           } else {
             this.consecutiveSpawnFailures = 0;
@@ -132,7 +140,6 @@ export class WarmProcessPool {
       // Spawn a replacement so pool capacity is maintained.
       if (!this.draining) this._spawnAndEnqueue();
     } else {
-      this.consecutiveSpawnFailures = 0;
       this.ready.push({ wp, keepAliveInterval });
     }
   }

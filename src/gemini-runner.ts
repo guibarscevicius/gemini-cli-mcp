@@ -313,7 +313,7 @@ export function runWithWarmProcess(
 /**
  * Spawn `gemini` with `--output-format stream-json` and parse NDJSON events.
  *
- * Parses `message` events (role=assistant, delta=true) into chunks, waits for
+ * Parses `message` events (role=assistant) into chunks, waits for
  * a `result` event to signal completion, and handles error/process-level failures.
  * Returns a `ChildProcess` so callers can store it for cancellation.
  */
