@@ -39,6 +39,12 @@ export async function runGeminiAsync(
         reject
       );
       job.subprocess = cp;
+      // Handle the race where cancelJob() ran before the subprocess was spawned.
+      if (job.status === "cancelled") {
+        cp.kill("SIGTERM");
+        reject(new Error("Job was cancelled before subprocess started"));
+        return;
+      }
     });
 
   try {

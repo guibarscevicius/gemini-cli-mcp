@@ -7,6 +7,8 @@ import type { ToolCallContext } from "../dispatcher.js";
 import { runGeminiAsync } from "./shared.js";
 import { registerRequest, unregisterRequest } from "../request-map.js";
 
+const WAIT_TIMEOUT = Symbol("wait-timeout");
+
 export const AskGeminiSchema = z.object({
   prompt: z.string().min(1).describe("The prompt to send to Gemini"),
   model: z
@@ -40,6 +42,7 @@ export interface AskGeminiOutput {
   sessionId: string;
   pollIntervalMs: number;
   response?: string;
+  timedOut?: boolean;
 }
 
 /** Start a new Gemini session. Returns immediately with { jobId, sessionId }; poll with gemini-poll. */
@@ -56,7 +59,8 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
     registerRequest(ctx.requestId, jobId);
   }
 
-  // Fire-and-forget: background job. This handler always owns request-map cleanup.
+  // Background job — fire-and-forget in async mode, raced via job.completion in wait mode.
+  // This .then/.catch chain always owns request-map cleanup.
   runGeminiAsync(jobId, prompt, { model, cwd, tool: "ask-gemini" }, ctx)
     .then((response) => {
       jobStore.completeJob(jobId, response);
@@ -69,6 +73,7 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[gemini-cli-mcp] job ${jobId} failed: ${message}\n`);
       jobStore.failJob(jobId, message);
       sessionStore.clearPendingJob(sessionId);
       if (ctx.requestId !== undefined) {
@@ -79,22 +84,22 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
   if (wait === true) {
     const job = jobStore.getJob(jobId)!;
     const ms = waitTimeoutMs ?? 90_000;
-    let timerId: NodeJS.Timeout;
+    let timerId: ReturnType<typeof setTimeout> | undefined;
     const timer = new Promise<never>((_, rej) => {
-      timerId = setTimeout(() => rej(new Error("timeout")), ms);
+      timerId = setTimeout(() => rej(WAIT_TIMEOUT), ms);
     });
 
     try {
       const response = await Promise.race([job.completion, timer]);
       return { jobId, sessionId, response, pollIntervalMs: 2000 };
     } catch (err) {
-      if (err instanceof Error && err.message === "timeout") {
-        // Timed out — fall back to async. fire-and-forget handles request-map cleanup.
-        return { jobId, sessionId, pollIntervalMs: 2000 };
+      if (err === WAIT_TIMEOUT) {
+        process.stderr.write(`[gemini-cli-mcp] wait-mode timed out after ${ms}ms for job ${jobId} — falling back to async\n`);
+        return { jobId, sessionId, pollIntervalMs: 2000, timedOut: true };
       }
       throw new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
     } finally {
-      clearTimeout(timerId!);
+      if (timerId !== undefined) clearTimeout(timerId);
     }
   }
   return { jobId, sessionId, pollIntervalMs: 2000 };

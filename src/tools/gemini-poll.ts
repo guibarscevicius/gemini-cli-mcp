@@ -6,12 +6,11 @@ export const GeminiPollSchema = z.object({
   jobId: z.string().uuid().describe("Job ID returned by ask-gemini or gemini-reply"),
 });
 
-export interface GeminiPollOutput {
-  status: jobStore.JobStatus;
-  partialResponse?: string; // accumulated text so far (pending)
-  response?: string;        // full text (done)
-  error?: string;           // error message (error / cancelled)
-}
+export type GeminiPollOutput =
+  | { status: "pending"; partialResponse: string }
+  | { status: "done"; response: string }
+  | { status: "error"; error: string }
+  | { status: "cancelled"; error?: string };
 
 /** Poll the status of an async Gemini job. */
 export async function geminiPoll(input: unknown): Promise<GeminiPollOutput> {
@@ -22,12 +21,16 @@ export async function geminiPoll(input: unknown): Promise<GeminiPollOutput> {
     throw new McpError(ErrorCode.InvalidParams, `Unknown job: ${jobId}`);
   }
 
-  return {
-    status: job.status,
-    partialResponse: job.status === "pending" ? job.partialResponse : undefined,
-    response: job.response,
-    error: job.error,
-  };
+  switch (job.status) {
+    case "pending":
+      return { status: "pending", partialResponse: job.partialResponse };
+    case "done":
+      return { status: "done", response: job.response! };
+    case "error":
+      return { status: "error", error: job.error! };
+    case "cancelled":
+      return { status: "cancelled", error: job.error };
+  }
 }
 
 export const geminiPollToolDefinition = {

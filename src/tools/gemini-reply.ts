@@ -76,6 +76,7 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[gemini-cli-mcp] job ${jobId} failed: ${message}\n`);
       jobStore.failJob(jobId, message);
       sessionStore.clearPendingJob(sessionId);
       if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);

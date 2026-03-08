@@ -57,11 +57,17 @@ export function createServer(): Server {
       return;
     }
     const jobId = getJobByRequestId(requestId);
-    if (!jobId) return;
+    if (!jobId) {
+      process.stderr.write(`[gemini-cli-mcp] notifications/cancelled: no job registered for requestId ${String(requestId)}\n`);
+      return;
+    }
     const job = jobStore.getJob(jobId);
     if (job?.status === "pending") {
       job.subprocess?.kill("SIGTERM");
       jobStore.cancelJob(jobId);
+    }
+    if (job && job.status !== "pending") {
+      process.stderr.write(`[gemini-cli-mcp] notifications/cancelled: job ${jobId} already ${job.status} — skipping kill\n`);
     }
     unregisterRequest(requestId);
   });

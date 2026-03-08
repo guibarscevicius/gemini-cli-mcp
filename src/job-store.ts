@@ -93,6 +93,7 @@ export function sweepExpiredJobs(): void {
   for (const [id, job] of jobs) {
     if (job.createdAt < cutoff) {
       if (job.status === "pending") {
+        process.stderr.write(`[gemini-cli-mcp] GC: pending job ${id} expired after ${JOB_TTL_MS}ms — evicting\n`);
         job._reject(new Error("Job timed out and was garbage collected"));
       }
       unregisterByJobId(id);
@@ -101,7 +102,8 @@ export function sweepExpiredJobs(): void {
   }
 }
 
-// GC: delete completed/errored/cancelled jobs older than JOB_TTL_MS
+// GC: delete all jobs older than JOB_TTL_MS regardless of status.
+// Pending jobs are rejected before deletion so wait-mode callers get a proper error.
 const gcTimer = setInterval(sweepExpiredJobs, JOB_GC_MS);
 
 if (gcTimer.unref) gcTimer.unref();

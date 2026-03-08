@@ -13,8 +13,15 @@ import { geminiPoll } from "./tools/gemini-poll.js";
 import { geminiCancel } from "./tools/gemini-cancel.js";
 
 export interface ToolCallContext {
+  /**
+   * When both sendNotification and progressToken are provided, streaming chunks
+   * are forwarded as notifications/progress events. Either alone is silently ignored.
+   */
   sendNotification?: (n: unknown) => Promise<void>;
   progressToken?: string | number;
+  /** MCP JSON-RPC request id. When provided, the handler registers a requestId->jobId
+   *  mapping so notifications/cancelled can abort the right subprocess. The fire-and-forget
+   *  chain (or GC sweep) owns cleanup via unregisterRequest / unregisterByJobId. */
   requestId?: string | number;
 }
 

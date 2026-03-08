@@ -167,6 +167,19 @@ describe("GC expiry (sweepExpiredJobs)", () => {
     await expect(completion).rejects.toThrow("Job timed out and was garbage collected");
   });
 
+  it("GC sweep calls unregisterByJobId for expired jobs", async () => {
+    const { registerRequest, getJobByRequestId, clearMap } = await import("../src/request-map.js");
+    clearMap();
+    createJob("gc-unregister");
+    registerRequest("req-gc", "gc-unregister");
+    getJob("gc-unregister")!.createdAt = 0;
+
+    sweepExpiredJobs();
+
+    expect(getJobByRequestId("req-gc")).toBeUndefined();
+    clearMap();
+  });
+
   it("does NOT delete recent completed jobs within TTL", () => {
     createJob("gc-recent");
     completeJob("gc-recent", "fresh");

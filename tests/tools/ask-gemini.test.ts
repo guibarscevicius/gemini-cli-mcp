@@ -202,6 +202,12 @@ describe("askGemini", () => {
     });
   });
 
+  it("accepts ctx.requestId without throwing", async () => {
+    const result = await askGemini({ prompt: "hello" }, { requestId: "req-42" });
+    expect(result.jobId).toBeDefined();
+    expect(result.sessionId).toBeDefined();
+  });
+
   it("wait: true returns response directly when job completes", async () => {
     mockJobStore.getJob.mockReturnValue({
       status: "pending",
