@@ -16,6 +16,7 @@ import { geminiCancelToolDefinition } from "./tools/gemini-cancel.js";
 import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
+import { warmPool } from "./gemini-runner.js";
 
 type ToolServer = Pick<Server, "setRequestHandler">;
 
@@ -76,11 +77,22 @@ export function createServer(): Server {
 
 const server = createServer();
 
+async function shutdown(signal: string): Promise<void> {
+  process.stderr.write(`[gemini-cli-mcp] received ${signal}, draining process pool…\n`);
+  if (warmPool !== null) {
+    await warmPool.drain();
+  }
+  process.exit(0);
+}
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // stderr is safe to use — MCP protocol uses stdout/stdin only
   process.stderr.write("gemini-cli-mcp server started\n");
+
+  process.on("SIGTERM", () => { shutdown("SIGTERM").catch(() => process.exit(1)); });
+  process.on("SIGINT",  () => { shutdown("SIGINT").catch(() => process.exit(1)); });
 }
 
 const isEntrypoint =
