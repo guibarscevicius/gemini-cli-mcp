@@ -107,11 +107,8 @@ describe("WarmProcessPool", () => {
   // ── acquire / release ─────────────────────────────────────────────────────
 
   it("acquire() returns a ready process immediately", async () => {
-    new WarmProcessPool(2, [], {});
-    const { WarmProcessPool: P } = await import("../src/warm-pool.js");
-    // Use the already-constructed pool from spawnCalls
     const pool = new WarmProcessPool(1, [], {});
-    const first = spawnCalls[spawnCalls.length - 1];
+    const first = spawnCalls[0];
 
     const wp = await pool.acquire();
     expect(wp.cp).toBe(first);
@@ -169,6 +166,20 @@ describe("WarmProcessPool", () => {
 
   // ── Unexpected process exit ────────────────────────────────────────────────
 
+  it("process that emits error unexpectedly is removed and a replacement is spawned", async () => {
+    const pool = new WarmProcessPool(1, [], {});
+    expect(spawnCalls).toHaveLength(1);
+    const cp1 = spawnCalls[0];
+
+    // Simulate unexpected error while process is idle in pool
+    cp1.emit("error", new Error("spawn error"));
+    await flushMicrotasks();
+
+    // Pool should have replenished
+    expect(spawnCalls).toHaveLength(2);
+    expect(pool.readyCount).toBe(1);
+  });
+
   it("process that exits unexpectedly is removed and a replacement is spawned", async () => {
     const pool = new WarmProcessPool(1, [], {});
     expect(spawnCalls).toHaveLength(1);
@@ -184,6 +195,26 @@ describe("WarmProcessPool", () => {
   });
 
   // ── drain ─────────────────────────────────────────────────────────────────
+
+  it("acquire() rejects if pool is draining", async () => {
+    const pool = new WarmProcessPool(1, [], {});
+    await pool.drain();
+    await expect(pool.acquire()).rejects.toThrow("shutting down");
+  });
+
+  it("drain() does not hang if a process has already exited", async () => {
+    const pool = new WarmProcessPool(1, [], {});
+    const cp = spawnCalls[0];
+    cp.mockExit(0);
+    await flushMicrotasks();
+
+    // replenish happens
+    expect(pool.readyCount).toBe(1);
+    const cp2 = spawnCalls[1];
+
+    // drain should resolve even if cp2 is alive and cp is dead
+    await expect(pool.drain()).resolves.toBeUndefined();
+  });
 
   it("drain() kills all ready processes and resolves when they exit", async () => {
     const pool = new WarmProcessPool(2, [], {});
@@ -234,6 +265,33 @@ describe("WarmProcessPool", () => {
     await expect(pool.drain()).resolves.toBeUndefined();
   });
 
+  it("drain() called twice resolves cleanly on the second call", async () => {
+    const pool = new WarmProcessPool(2, [], {});
+    await pool.drain();
+    // Second drain: draining=true, ready=[], waiters=[] — should be a no-op
+    await expect(pool.drain()).resolves.toBeUndefined();
+  });
+
+  it("process that exits after being acquired does NOT trigger replenishment", async () => {
+    const pool = new WarmProcessPool(1, [], {});
+    const spawnCountBefore = spawnCalls.length; // 1 initial
+
+    // Acquire the process — it leaves the ready queue
+    await pool.acquire();
+    const spawnCountAfterAcquire = spawnCalls.length; // 2 (initial + replacement)
+
+    // Simulate the acquired process crashing mid-use
+    const acquiredCp = spawnCalls[0];
+    acquiredCp.mockExit(1);
+    await flushMicrotasks();
+
+    // The exit listener checks ready.findIndex(r => r.wp === wp) → -1 (not in ready),
+    // so no replenishment should occur.
+    expect(spawnCalls).toHaveLength(spawnCountAfterAcquire);
+    // Pool's replacement (spawnCalls[1]) is still ready
+    expect(pool.readyCount).toBe(1);
+  });
+
   // ── Keepalive ─────────────────────────────────────────────────────────────
 
   it("keepalive writes newlines to idle processes on interval", async () => {
@@ -269,10 +327,12 @@ describe("WarmProcessPool", () => {
 
   // ── concurrent waiters ────────────────────────────────────────────────────
 
-  it("acquire() FIFO ordering: processes are handed out in spawn order", async () => {
-    // Pool size 2: acquire all 4 processes (2 initial + 2 replacements) in order
+  // Note: this tests sequential acquire() ordering (ready-queue FIFO), not
+  // concurrent-waiter FIFO (which requires delayed replacement spawning to exercise).
+  it("sequential acquire() drains ready queue in spawn order", async () => {
+    // Pool size 2: acquire all 4 processes (2 initial + 2 replacements) in order.
+    // Replacements spawn synchronously so the pool always has 2 ready after each acquire.
     const pool = new WarmProcessPool(2, [], {});
-    // Replacements spawn synchronously, so after each acquire the pool refills
 
     const wp1 = await pool.acquire(); // gets spawnCalls[0], replaces with [2]
     const wp2 = await pool.acquire(); // gets spawnCalls[1], replaces with [3]

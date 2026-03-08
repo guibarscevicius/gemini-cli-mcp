@@ -82,14 +82,17 @@ export class WarmProcessPool {
 
     // If the process exits while still in the ready queue (e.g. unexpected
     // crash or auth failure), remove it and replenish.
-    cp.on("exit", () => {
+    const onExitOrError = () => {
       clearInterval(keepAliveInterval);
       const idx = this.ready.findIndex((r) => r.wp === wp);
       if (idx !== -1) {
         this.ready.splice(idx, 1);
         if (!this.draining) this._spawnAndEnqueue();
       }
-    });
+    };
+
+    cp.on("exit", onExitOrError);
+    cp.on("error", onExitOrError);
 
     // If a caller is already waiting, hand it over immediately.
     const waiter = this.waiters.shift();
@@ -112,6 +115,10 @@ export class WarmProcessPool {
    * A replacement process is spawned immediately upon acquisition.
    */
   acquire(timeoutMs?: number): Promise<WarmProcess> {
+    if (this.draining) {
+      return Promise.reject(new Error("Gemini process pool is shutting down"));
+    }
+
     if (this.ready.length > 0) {
       const { wp, keepAliveInterval } = this.ready.shift()!;
       clearInterval(keepAliveInterval);
@@ -155,9 +162,11 @@ export class WarmProcessPool {
     const entries = this.ready.splice(0);
     const exits = entries.map(({ wp, keepAliveInterval }) => {
       clearInterval(keepAliveInterval);
+      if (wp.cp.exitCode !== null) return Promise.resolve();
       return new Promise<void>((resolve) => {
         wp.cp.on("exit", () => resolve());
-        wp.cp.kill("SIGTERM");
+        wp.cp.on("error", () => resolve());
+        try { wp.cp.kill("SIGTERM"); } catch { resolve(); }
       });
     });
 

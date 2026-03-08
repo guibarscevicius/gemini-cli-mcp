@@ -91,8 +91,18 @@ async function main() {
   // stderr is safe to use — MCP protocol uses stdout/stdin only
   process.stderr.write("gemini-cli-mcp server started\n");
 
-  process.on("SIGTERM", () => { shutdown("SIGTERM").catch(() => process.exit(1)); });
-  process.on("SIGINT",  () => { shutdown("SIGINT").catch(() => process.exit(1)); });
+  process.on("SIGTERM", () => {
+    shutdown("SIGTERM").catch((err) => {
+      process.stderr.write(`[gemini-cli-mcp] shutdown error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    });
+  });
+  process.on("SIGINT", () => {
+    shutdown("SIGINT").catch((err) => {
+      process.stderr.write(`[gemini-cli-mcp] shutdown error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    });
+  });
 }
 
 const isEntrypoint =
