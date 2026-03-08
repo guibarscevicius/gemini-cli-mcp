@@ -1,6 +1,6 @@
 # gemini-cli-mcp
 
-[![npm](https://img.shields.io/npm/v/gemini-cli-mcp)](https://www.npmjs.com/package/gemini-cli-mcp)
+[![npm](https://img.shields.io/npm/v/@guibarscevicius/gemini-cli-mcp)](https://www.npmjs.com/package/@guibarscevicius/gemini-cli-mcp)
 [![CI](https://github.com/guibarscevicius/gemini-cli-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/guibarscevicius/gemini-cli-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -42,7 +42,7 @@ A safe, auditable MCP server that wraps the official [`@google/gemini-cli`](http
   "mcpServers": {
     "gemini": {
       "command": "npx",
-      "args": ["-y", "gemini-cli-mcp"]
+      "args": ["-y", "@guibarscevicius/gemini-cli-mcp"]
     }
   }
 }
@@ -257,7 +257,7 @@ All variables are optional.
 | `GEMINI_QUEUE_TIMEOUT_MS` | `60000` | Max wait for a concurrency slot (ms). |
 | `GEMINI_STRUCTURED_LOGS` | `0` | `1` = JSON telemetry line to stderr per request. |
 | `GEMINI_MAX_HISTORY_TURNS` | `20` | Session history window (turn-pairs). `0` = unlimited. |
-| `GEMINI_SESSION_DB` | `~/.gemini-cli-mcp/sessions.db` | SQLite path. `:memory:` = ephemeral. |
+| `GEMINI_SESSION_DB` | `~/.gemini-cli-mcp/sessions.db` | SQLite path. `:memory:` = ephemeral. (Path uses the unscoped name for backward compat.) |
 | `GEMINI_CACHE_TTL_MS` | `300000` | Response cache TTL (ms). `0` = disabled. |
 | `GEMINI_CACHE_MAX_ENTRIES` | `50` | Max entries in the response cache. |
 | `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only, for debugging). |

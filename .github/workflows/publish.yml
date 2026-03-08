@@ -6,8 +6,11 @@ on:
 
 jobs:
   publish:
-    name: Publish gemini-cli-mcp to npm
+    name: Publish @guibarscevicius/gemini-cli-mcp to npm
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC trusted publishing
 
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +41,7 @@ jobs:
             && (echo "ERROR: Raw .ts source files in tarball" && exit 1) || true
 
       - name: Publish
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+        # No NODE_AUTH_TOKEN needed — uses OIDC trusted publishing.
+        # Configure the trusted publisher at:
+        #   npmjs.com/package/@guibarscevicius/gemini-cli-mcp → Settings → Publishing Access
