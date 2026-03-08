@@ -4,7 +4,7 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { sessionStore } from "../session-store.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
-import { runGeminiAsync } from "./shared.js";
+import { runGeminiAsync, waitForJob } from "./shared.js";
 import { registerRequest, unregisterRequest } from "../request-map.js";
 
 export const GeminiReplySchema = z.object({
@@ -29,10 +29,15 @@ export type GeminiReplyInput = z.infer<typeof GeminiReplySchema>;
 export interface GeminiReplyOutput {
   jobId: string;
   pollIntervalMs: number;
+  response?: string;
+  partialResponse?: string;
+  timedOut?: boolean;
 }
 
 /**
  * Continue an existing Gemini session.
+ * Blocks and streams progress notifications when ctx.progressToken is set (MCP-native streaming).
+ * Returns immediately with { jobId } otherwise.
  * Throws McpError(InvalidParams) when the session is unknown, expired, or has a pending job.
  */
 export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Promise<GeminiReplyOutput> {
@@ -82,13 +87,26 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
       if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
     });
 
+  // Block and stream when the MCP client provides a progressToken.
+  if (ctx.progressToken !== undefined) {
+    try {
+      const result = await waitForJob(jobId);
+      if (result.timedOut) {
+        return { jobId, partialResponse: result.partialResponse, timedOut: true, pollIntervalMs: 2000 };
+      }
+      return { jobId, response: result.response, pollIntervalMs: 2000 };
+    } catch (err) {
+      throw new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
+    }
+  }
+
   return { jobId, pollIntervalMs: 2000 };
 }
 
 export const geminiReplyToolDefinition = {
   name: "gemini-reply" as const,
   description:
-    "Continue an existing Gemini conversation. Returns immediately with { jobId }. Poll with gemini-poll to get the response. Throws if the session has a pending job.",
+    "Continue an existing Gemini conversation. If the MCP client supports progress notifications (progressToken present), blocks and streams partial responses as notifications/progress events, then returns the final response inline. Otherwise returns immediately with { jobId }; poll with gemini-poll. Throws if the session has a pending job.",
   inputSchema: {
     type: "object" as const,
     properties: {

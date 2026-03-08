@@ -23,6 +23,7 @@ export async function runGeminiAsync(
           progressToken: ctx.progressToken,
           progress: job.partialResponse.length,
           total: undefined,
+          data: { partialResponse: job.partialResponse },
         },
       }).catch(() => {});
     }
@@ -52,5 +53,45 @@ export async function runGeminiAsync(
     return response;
   } finally {
     job.subprocess = undefined;
+  }
+}
+
+const WAIT_TIMEOUT = Symbol("wait-timeout");
+
+export const DEFAULT_WAIT_MS = 90_000;
+
+export interface WaitResult {
+  response?: string;
+  partialResponse?: string;
+  timedOut?: boolean;
+}
+
+/**
+ * Race a job's completion promise against a timeout.
+ * Returns { response } on success, { partialResponse, timedOut: true } on timeout,
+ * or rethrows any other rejection from the job itself.
+ */
+export async function waitForJob(
+  jobId: string,
+  timeoutMs: number = DEFAULT_WAIT_MS
+): Promise<WaitResult> {
+  const job = jobStore.getJob(jobId)!;
+  let timerId: ReturnType<typeof setTimeout> | undefined;
+  const timer = new Promise<never>((_, rej) => {
+    timerId = setTimeout(() => rej(WAIT_TIMEOUT), timeoutMs);
+  });
+  try {
+    const response = await Promise.race([job.completion, timer]);
+    return { response };
+  } catch (err) {
+    if (err === WAIT_TIMEOUT) {
+      process.stderr.write(
+        `[gemini-cli-mcp] wait-mode timed out after ${timeoutMs}ms for job ${jobId} — falling back to async\n`
+      );
+      return { partialResponse: job.partialResponse, timedOut: true };
+    }
+    throw err;
+  } finally {
+    if (timerId !== undefined) clearTimeout(timerId);
   }
 }

@@ -252,4 +252,87 @@ describe("askGemini", () => {
       message: expect.stringContaining("job failed"),
     });
   });
+
+  it("wait: true returns timedOut with partialResponse on timeout", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "so far...",
+      createdAt: Date.now(),
+      completion: new Promise<string>(() => {}),
+    });
+    const result = await askGemini({ prompt: "hello", wait: true, waitTimeoutMs: 1 });
+    expect(result).toMatchObject({
+      jobId: expect.any(String),
+      sessionId: expect.any(String),
+      partialResponse: "so far...",
+      timedOut: true,
+      pollIntervalMs: 2000,
+    });
+    expect(result).not.toHaveProperty("response");
+  });
+
+  // ── progressToken (MCP-native streaming) ─────────────────────────────────────
+
+  it("progressToken in ctx auto-blocks and returns response inline", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("streamed response"),
+    });
+    const result = await askGemini(
+      { prompt: "hello" },
+      { progressToken: "tok-1", sendNotification: vi.fn().mockResolvedValue(undefined) }
+    );
+    expect(result).toMatchObject({
+      jobId: expect.any(String),
+      sessionId: expect.any(String),
+      response: "streamed response",
+      pollIntervalMs: 2000,
+    });
+    expect(result).not.toHaveProperty("partialResponse");
+  });
+
+  it("progressToken + timeout returns partialResponse and timedOut", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "partial chunk",
+      createdAt: Date.now(),
+      completion: new Promise<string>(() => {}),
+    });
+    const result = await askGemini(
+      { prompt: "hello", waitTimeoutMs: 1 },
+      { progressToken: "tok-2", sendNotification: vi.fn().mockResolvedValue(undefined) }
+    );
+    expect(result).toMatchObject({
+      partialResponse: "partial chunk",
+      timedOut: true,
+      pollIntervalMs: 2000,
+    });
+    expect(result).not.toHaveProperty("response");
+  });
+
+  it("progressToken + job failure throws McpError", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.reject(new Error("subprocess crashed")),
+    });
+    await expect(
+      askGemini(
+        { prompt: "hello" },
+        { progressToken: "tok-3", sendNotification: vi.fn().mockResolvedValue(undefined) }
+      )
+    ).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: expect.stringContaining("subprocess crashed"),
+    });
+  });
+
+  it("no progressToken and no wait returns immediately without response", async () => {
+    const result = await askGemini({ prompt: "hello" });
+    expect(result).not.toHaveProperty("response");
+    expect(result).not.toHaveProperty("partialResponse");
+  });
 });
