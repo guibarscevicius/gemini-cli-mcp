@@ -345,3 +345,64 @@ describe("WarmProcessPool", () => {
     expect(wp4.cp).toBe(spawnCalls[3]);
   });
 });
+
+// ── ENOENT spawn failure backoff ────────────────────────────────────────────
+
+describe("WarmProcessPool ENOENT backoff", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps replenishing when ENOENT errors repeat", async () => {
+    spawnCalls.length = 0;
+
+    let spawnCount = 0;
+    const { spawn: mockSpawn } = await import("node:child_process");
+    vi.mocked(mockSpawn).mockImplementation(() => {
+      spawnCount++;
+      const cp = makeMockCp(spawnCount);
+      spawnCalls.push(cp);
+      setImmediate(() => {
+        const err = Object.assign(new Error("spawn gemini ENOENT"), { code: "ENOENT" });
+        cp.emit("error", err);
+      });
+      return cp as ReturnType<typeof import("node:child_process").spawn>;
+    });
+
+    const pool = new WarmProcessPool(1, ["--yolo"], { HOME: "/home/test", PATH: "/usr/bin" }, 0);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(spawnCount).toBeGreaterThanOrEqual(5);
+
+    await pool.drain();
+  });
+
+  it("does not log a disable message while replenishment continues", async () => {
+    spawnCalls.length = 0;
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    let spawnCount = 0;
+    const { spawn: mockSpawn } = await import("node:child_process");
+    vi.mocked(mockSpawn).mockImplementation(() => {
+      spawnCount++;
+      const cp = makeMockCp(spawnCount);
+      spawnCalls.push(cp);
+      setImmediate(() => {
+        const err = Object.assign(new Error("spawn gemini ENOENT"), { code: "ENOENT" });
+        cp.emit("error", err);
+      });
+      return cp as ReturnType<typeof import("node:child_process").spawn>;
+    });
+
+    const pool = new WarmProcessPool(1, ["--yolo"], { HOME: "/home/test", PATH: "/usr/bin" }, 0);
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderrCalls).not.toContain("warm pool");
+    expect(stderrCalls).not.toContain("gemini binary not found");
+
+    await pool.drain();
+  });
+});
