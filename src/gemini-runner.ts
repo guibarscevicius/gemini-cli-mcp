@@ -83,10 +83,13 @@ const semaphore = new Semaphore(MAX_CONCURRENT);
 // forward the @file token to the CLI for workspace-aware resolution).
 //
 // Env vars:
-//   GEMINI_POOL_ENABLED  "1" (default) | "0" to disable
-//   GEMINI_POOL_SIZE     default = GEMINI_MAX_CONCURRENT
+//   GEMINI_POOL_ENABLED     "1" (default) | "0" to disable
+//   GEMINI_POOL_SIZE        default = GEMINI_MAX_CONCURRENT
+//   GEMINI_POOL_STARTUP_MS  estimated CLI startup time; prompt writes are delayed until this
+//                           many ms after spawn so the CLI is ready to process input (default 12000)
 const POOL_ENABLED = (process.env.GEMINI_POOL_ENABLED ?? "1") !== "0";
 const POOL_SIZE = parseInt(process.env.GEMINI_POOL_SIZE ?? String(MAX_CONCURRENT), 10);
+const POOL_STARTUP_MS = parseInt(process.env.GEMINI_POOL_STARTUP_MS ?? "12000", 10);
 
 export let warmPool: WarmProcessPool | null = null;
 
@@ -97,7 +100,8 @@ if (POOL_ENABLED) {
     {
       HOME: process.env.HOME ?? "",
       PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-    }
+    },
+    POOL_STARTUP_MS
   );
 }
 
@@ -281,10 +285,25 @@ export function runWithWarmProcess(
       }
     });
 
-    // Write prompt + EOF to trigger processing. Keepalive newlines may already
-    // be buffered in stdin; they are harmless to response content.
-    cp.stdin?.write(prompt + "\n");
-    cp.stdin?.end();
+    // Write prompt + EOF to trigger processing, delaying until the process is
+    // expected to have fully started.  The delay is max(0, wp.readyAt - now):
+    //   • 0 when the process has already been running for ≥ startupMs (steady state)
+    //   • positive only for the very first requests after server startup, when the
+    //     pool processes are still initializing — writing too early means the prompt
+    //     sits in the OS pipe buffer and the CLI only reads it after startup completes
+    //     anyway, but the explicit wait keeps the timeout clock more accurate.
+    // Keepalive newlines may already be buffered in stdin; they are harmless to
+    // response content (the CLI ignores empty lines).
+    const startupWaitMs = Math.max(0, wp.readyAt - Date.now());
+    const writePrompt = () => {
+      cp.stdin?.write(prompt + "\n");
+      cp.stdin?.end();
+    };
+    if (startupWaitMs > 0) {
+      setTimeout(writePrompt, startupWaitMs);
+    } else {
+      writePrompt();
+    }
   });
 }
 
