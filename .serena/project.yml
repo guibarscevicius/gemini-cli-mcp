@@ -1,9 +1,12 @@
+# the name by which the project can be referenced within Serena
 project_name: "gemini-cli-mcp"
 
 # Language servers to start. Use "typescript" for JavaScript too.
 languages:
-  - typescript
+- typescript
 
+# the encoding used by text files in the project
+# For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
 encoding: "utf-8"
 
 # If unset, falls back to global serena_config.yml setting (LSP or JetBrains).
@@ -15,11 +18,15 @@ ignore_all_files_in_gitignore: true
 # Additional paths to ignore beyond .gitignore.
 ignored_paths: []
 
+# whether the project is in read-only mode
+# If set to true, all editing tools will be disabled and attempts to use them will result in an error
+# Added on 2025-04-18
 read_only: false
 
 # Tool names to disable (empty = all tools enabled).
 excluded_tools: []
 
+# list of tools to include that would otherwise be disabled (particularly optional tools that are disabled by default)
 included_optional_tools: []
 
 # Non-empty list replaces Serena's default tool set entirely.
@@ -41,6 +48,9 @@ initial_prompt: |
     src/session-store.ts  — in-process multi-turn session management
     src/dispatcher.ts     — routes MCP tool calls + error handling
   Tests: vitest (npm test). Build: tsc (npm run build).
-
 # Seconds per tool call for symbol info retrieval. Null = global default.
 symbol_info_budget:
+
+# list of regex patterns which, when matched, mark a memory entry as read‑only.
+# Extends the list from the global configuration, merging the two lists.
+read_only_memory_patterns: []
