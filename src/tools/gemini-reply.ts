@@ -85,9 +85,13 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
   runGeminiAsync(jobId, fullPrompt, { model, cwd, tool: "gemini-reply", sessionId }, ctx)
     .then((response) => {
       jobStore.completeJob(jobId, response);
-      sessionStore.appendTurn(sessionId, "user", prompt);
-      sessionStore.appendTurn(sessionId, "assistant", response);
-      sessionStore.clearPendingJob(sessionId);
+      try {
+        sessionStore.appendTurn(sessionId, "user", prompt);
+        sessionStore.appendTurn(sessionId, "assistant", response);
+        sessionStore.clearPendingJob(sessionId);
+      } catch {
+        // session may have been GC'd — non-fatal
+      }
       if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
     })
     .catch((err: unknown) => {

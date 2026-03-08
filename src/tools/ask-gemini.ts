@@ -68,9 +68,13 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
   runGeminiAsync(jobId, prompt, { model, cwd, tool: "ask-gemini" }, ctx)
     .then((response) => {
       jobStore.completeJob(jobId, response);
-      sessionStore.appendTurn(sessionId, "user", prompt);
-      sessionStore.appendTurn(sessionId, "assistant", response);
-      sessionStore.clearPendingJob(sessionId);
+      try {
+        sessionStore.appendTurn(sessionId, "user", prompt);
+        sessionStore.appendTurn(sessionId, "assistant", response);
+        sessionStore.clearPendingJob(sessionId);
+      } catch {
+        // session may have been GC'd — non-fatal
+      }
       if (ctx.requestId !== undefined) {
         unregisterRequest(ctx.requestId);
       }

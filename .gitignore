@@ -11,3 +11,6 @@ npm-debug.log*
 
 # Claude Code project-local state (settings, subagent memory — not team-shared)
 .claude/
+
+# Scratch/temp files — put one-off experiments here, never in the repo root
+scratch/

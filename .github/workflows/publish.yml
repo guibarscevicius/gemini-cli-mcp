@@ -1,0 +1,47 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: Publish @guibarscevicius/gemini-cli-mcp to npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Verify pack contents
+        run: |
+          npm pack --dry-run 2>&1 | tee /tmp/pack-output.txt
+          # Fail if LICENSE is missing from tarball
+          grep -q "LICENSE" /tmp/pack-output.txt || (echo "ERROR: LICENSE not in tarball" && exit 1)
+          # Fail if any .ts source files leaked into dist
+          grep -E "\.ts\b" /tmp/pack-output.txt | grep -v "\.d\.ts" | grep -v "\.js\.map" \
+            && (echo "ERROR: Raw .ts source files in tarball" && exit 1) || true
+
+      - name: Publish
+        run: npm publish --access public
+        # No NODE_AUTH_TOKEN needed — uses OIDC trusted publishing.
+        # Configure the trusted publisher at:
+        #   npmjs.com/package/@guibarscevicius/gemini-cli-mcp → Settings → Publishing Access

@@ -1414,3 +1414,173 @@ describe("spawnGemini — NDJSON parsing", () => {
     expect(chunks).toEqual(["actual response"]);
   });
 });
+
+// ── SemaphoreTimeoutError ───────────────────────────────────────────────────
+
+describe("SemaphoreTimeoutError typed class", () => {
+  it("is thrown by runGemini when concurrency slot times out", async () => {
+    const { runGemini: freshRunGemini, SemaphoreTimeoutError } = await loadRunnerWithEnv({
+      GEMINI_MAX_CONCURRENT: "1",
+      GEMINI_QUEUE_TIMEOUT_MS: "10",
+      GEMINI_MAX_RETRIES: "0",
+      GEMINI_POOL_ENABLED: "0",
+      GEMINI_CACHE_TTL_MS: "0",
+    });
+
+    let releaseFirst: (() => void) | undefined;
+    let markFirstStarted: (() => void) | undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const slowExecutor = () =>
+      new Promise<{ stdout: string }>((resolve) => {
+        releaseFirst = () => resolve({ stdout: "done" });
+        markFirstStarted?.();
+      });
+
+    const firstPromise = freshRunGemini("first", {}, slowExecutor as never);
+    await firstStarted;
+
+    try {
+      await expect(
+        freshRunGemini("second", {}, slowExecutor as never)
+      ).rejects.toBeInstanceOf(SemaphoreTimeoutError);
+    } finally {
+      releaseFirst?.();
+      await firstPromise.catch(() => {});
+    }
+  });
+
+  it("SemaphoreTimeoutError has correct name, message and class identity", async () => {
+    const { SemaphoreTimeoutError } = await import("../src/gemini-runner.js");
+    const err = new SemaphoreTimeoutError(5000);
+    expect(err.name).toBe("SemaphoreTimeoutError");
+    expect(err.message).toContain("5000ms");
+    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(SemaphoreTimeoutError);
+  });
+});
+
+// ── Cache TTL and eviction ──────────────────────────────────────────────────
+
+describe("response cache TTL and eviction", () => {
+  afterEach(() => {
+    delete process.env.GEMINI_CACHE_TTL_MS;
+    delete process.env.GEMINI_CACHE_MAX_ENTRIES;
+    delete process.env.GEMINI_MAX_RETRIES;
+    delete process.env.GEMINI_MAX_CONCURRENT;
+    delete process.env.GEMINI_QUEUE_TIMEOUT_MS;
+    process.env.GEMINI_POOL_ENABLED = "0";
+  });
+
+  it("cache hit within TTL returns cached value without calling executor", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_CACHE_TTL_MS: "60000",
+      GEMINI_CACHE_MAX_ENTRIES: "50",
+      GEMINI_POOL_ENABLED: "0",
+      GEMINI_MAX_RETRIES: "0",
+    });
+
+    let callCount = 0;
+    const executor = vi.fn(async () => {
+      callCount++;
+      return { stdout: `response-${callCount}` };
+    });
+
+    const first = await freshRunGemini("hello", {}, executor as never);
+    const second = await freshRunGemini("hello", {}, executor as never);
+
+    expect(first).toBe("response-1");
+    expect(second).toBe("response-1");
+    expect(callCount).toBe(1);
+  });
+
+  it("cache miss when TTL is 0 (disabled)", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_CACHE_TTL_MS: "0",
+      GEMINI_POOL_ENABLED: "0",
+      GEMINI_MAX_RETRIES: "0",
+    });
+
+    let callCount = 0;
+    const executor = vi.fn(async () => {
+      callCount++;
+      return { stdout: `response-${callCount}` };
+    });
+
+    const first = await freshRunGemini("hello", {}, executor as never);
+    const second = await freshRunGemini("hello", {}, executor as never);
+
+    expect(first).toBe("response-1");
+    expect(second).toBe("response-2");
+    expect(callCount).toBe(2);
+  });
+
+  it("FIFO eviction when CACHE_MAX_ENTRIES is exceeded", async () => {
+    const { runGemini: freshRunGemini } = await loadRunnerWithEnv({
+      GEMINI_CACHE_TTL_MS: "60000",
+      GEMINI_CACHE_MAX_ENTRIES: "2",
+      GEMINI_POOL_ENABLED: "0",
+      GEMINI_MAX_RETRIES: "0",
+    });
+
+    let callCount = 0;
+    const executor = vi.fn(async () => {
+      callCount++;
+      return { stdout: `response-${callCount}` };
+    });
+
+    await freshRunGemini("prompt-A", {}, executor as never);
+    await freshRunGemini("prompt-B", {}, executor as never);
+    expect(callCount).toBe(2);
+
+    await freshRunGemini("prompt-C", {}, executor as never);
+    expect(callCount).toBe(3);
+
+    await freshRunGemini("prompt-A", {}, executor as never);
+    expect(callCount).toBe(4);
+
+    await freshRunGemini("prompt-C", {}, executor as never);
+    expect(callCount).toBe(4);
+  });
+});
+
+// ── Temp file cleanup ───────────────────────────────────────────────────────
+
+describe("temp file cleanup on large prompts", () => {
+  it("deletes the temp file even when the executor throws", async () => {
+    process.env.GEMINI_POOL_ENABLED = "0";
+    process.env.GEMINI_MAX_RETRIES = "0";
+    process.env.GEMINI_CACHE_TTL_MS = "0";
+    vi.resetModules();
+
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const original = await importOriginal<typeof import("node:fs/promises")>();
+      return {
+        ...original,
+        writeFile: vi.fn(original.writeFile),
+        unlink: vi.fn(original.unlink),
+      };
+    });
+
+    try {
+      const { runGemini: freshRunGemini } = await import("../src/gemini-runner.js");
+      const mockedFs = await import("node:fs/promises");
+
+      const largePrompt = "x".repeat(115 * 1024);
+      const executor = vi.fn().mockRejectedValue(new Error("subprocess crashed"));
+
+      await expect(
+        freshRunGemini(largePrompt, {}, executor as never)
+      ).rejects.toThrow("subprocess crashed");
+
+      const unlinkCalls = vi.mocked(mockedFs.unlink).mock.calls;
+      expect(unlinkCalls.length).toBeGreaterThanOrEqual(1);
+      const tempPath = String(unlinkCalls[0][0]);
+      expect(tempPath).toMatch(/gemini-prompt-.*\.txt$/);
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  });
+});

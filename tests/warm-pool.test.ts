@@ -345,3 +345,65 @@ describe("WarmProcessPool", () => {
     expect(wp4.cp).toBe(spawnCalls[3]);
   });
 });
+
+// ── ENOENT spawn failure backoff ────────────────────────────────────────────
+
+describe("WarmProcessPool ENOENT backoff", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function makeEnoentSpawn() {
+    let spawnCount = 0;
+    const { spawn: mockSpawn } = await import("node:child_process");
+    vi.mocked(mockSpawn).mockImplementation(() => {
+      spawnCount++;
+      const cp = makeMockCp(spawnCount);
+      spawnCalls.push(cp);
+      setImmediate(() => {
+        const err = Object.assign(new Error("spawn gemini ENOENT"), { code: "ENOENT" });
+        cp.emit("error", err);
+      });
+      return cp as ReturnType<typeof import("node:child_process").spawn>;
+    });
+    return { get count() { return spawnCount; } };
+  }
+
+  it("stops replenishing after MAX_CONSECUTIVE_FAILURES (5) consecutive ENOENT errors", async () => {
+    spawnCalls.length = 0;
+    const tracker = await makeEnoentSpawn();
+
+    const pool = new WarmProcessPool(1, ["--yolo"], { HOME: "/home/test", PATH: "/usr/bin" }, 0);
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Pool spawns 1 initially, then replenishes up to MAX_CONSECUTIVE_FAILURES times = 5 total
+    expect(tracker.count).toBe(5);
+
+    await pool.drain();
+  });
+
+  it("logs a diagnostic message to stderr when pool disables", async () => {
+    spawnCalls.length = 0;
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await makeEnoentSpawn();
+
+    new WarmProcessPool(1, ["--yolo"], { HOME: "/home/test", PATH: "/usr/bin" }, 0);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(output).toContain("warm pool");
+    expect(output).toContain("gemini binary not found");
+  });
+
+  it("rejects future acquire() calls after circuit breaks (draining=true)", async () => {
+    spawnCalls.length = 0;
+    await makeEnoentSpawn();
+
+    const pool = new WarmProcessPool(1, ["--yolo"], { HOME: "/home/test", PATH: "/usr/bin" }, 0);
+    // Wait for circuit to break
+    await new Promise((r) => setTimeout(r, 100));
+
+    // acquire() should reject immediately (pool is now draining)
+    await expect(pool.acquire()).rejects.toThrow(/shutting down|disabled/);
+  });
+});

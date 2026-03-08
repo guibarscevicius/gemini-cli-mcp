@@ -13,6 +13,13 @@ export class GeminiOutputError extends Error {
   }
 }
 
+export class SemaphoreTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Gemini request timed out after ${timeoutMs}ms waiting for a concurrency slot`);
+    this.name = "SemaphoreTimeoutError";
+  }
+}
+
 // 300 s - allows Gemini 2.5 Pro deep-reasoning tasks (can take 2–3 min before first token)
 const TIMEOUT_MS = 300_000;
 
@@ -46,11 +53,7 @@ class Semaphore {
           const index = this.queue.indexOf(slot);
           if (index !== -1) {
             this.queue.splice(index, 1);
-            reject(
-              new Error(
-                `Gemini request timed out after ${timeoutMs}ms waiting for concurrency slot`
-              )
-            );
+            reject(new SemaphoreTimeoutError(timeoutMs));
           }
         }, timeoutMs);
       }
@@ -77,7 +80,7 @@ const QUEUE_TIMEOUT_MS = parseInt(process.env.GEMINI_QUEUE_TIMEOUT_MS ?? "60000"
 const semaphore = new Semaphore(MAX_CONCURRENT);
 
 // ── Warm process pool ──────────────────────────────────────────────────────
-// Pre-spawns Gemini processes so the ~16 s startup cost is paid in advance.
+// Pre-spawns Gemini processes so the ~12–17 s cold-start cost is paid in advance.
 // Requests with a custom --model fall back to cold spawn (pool processes use
 // the default model).  Single @file refs also fall back (stdin mode cannot
 // forward the @file token to the CLI for workspace-aware resolution).
@@ -310,7 +313,7 @@ export function runWithWarmProcess(
 /**
  * Spawn `gemini` with `--output-format stream-json` and parse NDJSON events.
  *
- * Parses `message` events (role=assistant, delta=true) into chunks, waits for
+ * Parses `message` events (role=assistant) into chunks, waits for
  * a `result` event to signal completion, and handles error/process-level failures.
  * Returns a `ChildProcess` so callers can store it for cancellation.
  */

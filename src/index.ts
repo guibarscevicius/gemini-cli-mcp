@@ -8,6 +8,7 @@ import {
   CancelledNotificationSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { createRequire } from "node:module";
 
 import { askGeminiToolDefinition } from "./tools/ask-gemini.js";
 import { geminiReplyToolDefinition } from "./tools/gemini-reply.js";
@@ -17,6 +18,8 @@ import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
 import { warmPool } from "./gemini-runner.js";
+const _require = createRequire(import.meta.url);
+const { version: pkgVersion } = _require("../package.json") as { version: string };
 
 type ToolServer = Pick<Server, "setRequestHandler">;
 
@@ -45,7 +48,7 @@ export function registerToolHandlers(server: ToolServer): void {
 
 export function createServer(): Server {
   const server = new Server(
-    { name: "gemini-cli-mcp", version: "0.1.0" },
+    { name: "gemini-cli-mcp", version: pkgVersion },
     { capabilities: { tools: {} } }
   );
   registerToolHandlers(server);
