@@ -241,13 +241,9 @@ describe("askGemini", () => {
       createdAt: Date.now(),
       completion: Promise.reject(new Error("job failed")),
     });
-    try {
-      await askGemini({ prompt: "hello", wait: true });
-      expect.fail("should have thrown");
-    } catch (err: unknown) {
-      const e = err as { code?: number; message?: string };
-      expect(e.code).toBe(ErrorCode.InternalError);
-      expect(e.message).toContain("job failed");
-    }
+    await expect(askGemini({ prompt: "hello", wait: true })).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: expect.stringContaining("job failed"),
+    });
   });
 });

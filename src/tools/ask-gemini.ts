@@ -56,36 +56,45 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
     registerRequest(ctx.requestId, jobId);
   }
 
-  // Fire-and-forget: background job
+  // Fire-and-forget: background job. This handler always owns request-map cleanup.
   runGeminiAsync(jobId, prompt, { model, cwd, tool: "ask-gemini" }, ctx)
     .then((response) => {
       jobStore.completeJob(jobId, response);
       sessionStore.appendTurn(sessionId, "user", prompt);
       sessionStore.appendTurn(sessionId, "assistant", response);
       sessionStore.clearPendingJob(sessionId);
-      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
+      if (ctx.requestId !== undefined) {
+        unregisterRequest(ctx.requestId);
+      }
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       jobStore.failJob(jobId, message);
       sessionStore.clearPendingJob(sessionId);
-      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
+      if (ctx.requestId !== undefined) {
+        unregisterRequest(ctx.requestId);
+      }
     });
 
   if (wait === true) {
     const job = jobStore.getJob(jobId)!;
     const ms = waitTimeoutMs ?? 90_000;
-    const timer = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), ms));
+    let timerId: NodeJS.Timeout;
+    const timer = new Promise<never>((_, rej) => {
+      timerId = setTimeout(() => rej(new Error("timeout")), ms);
+    });
+
     try {
       const response = await Promise.race([job.completion, timer]);
-      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
       return { jobId, sessionId, response, pollIntervalMs: 2000 };
     } catch (err) {
-      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
       if (err instanceof Error && err.message === "timeout") {
+        // Timed out — fall back to async. fire-and-forget handles request-map cleanup.
         return { jobId, sessionId, pollIntervalMs: 2000 };
       }
       throw new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
+    } finally {
+      clearTimeout(timerId!);
     }
   }
   return { jobId, sessionId, pollIntervalMs: 2000 };

@@ -8,6 +8,14 @@ export function unregisterRequest(requestId: string | number): void {
   map.delete(requestId);
 }
 
+export function unregisterByJobId(jobId: string): void {
+  for (const [requestId, id] of map.entries()) {
+    if (id === jobId) {
+      map.delete(requestId);
+    }
+  }
+}
+
 export function getJobByRequestId(requestId: string | number): string | undefined {
   return map.get(requestId);
 }

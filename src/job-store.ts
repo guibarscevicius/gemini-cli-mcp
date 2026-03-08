@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { unregisterByJobId } from "./request-map.js";
 
 export type JobStatus = "pending" | "done" | "error" | "cancelled";
 
@@ -64,7 +65,7 @@ export function completeJob(jobId: string, response: string): void {
 
 export function failJob(jobId: string, error: string): void {
   const job = jobs.get(jobId);
-  if (job && job.status !== "cancelled") {
+  if (job && job.status !== "cancelled" && job.status !== "done") {
     job.status = "error";
     job.error = error;
     job.subprocess = undefined;
@@ -74,7 +75,7 @@ export function failJob(jobId: string, error: string): void {
 
 export function cancelJob(jobId: string): void {
   const job = jobs.get(jobId);
-  if (job) {
+  if (job && job.status === "pending") {
     job.status = "cancelled";
     job.subprocess = undefined;
     job._reject(new Error("Job was cancelled"));
@@ -90,7 +91,11 @@ export function clearJobs(): void {
 export function sweepExpiredJobs(): void {
   const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, job] of jobs) {
-    if (job.status !== "pending" && job.createdAt < cutoff) {
+    if (job.createdAt < cutoff) {
+      if (job.status === "pending") {
+        job._reject(new Error("Job timed out and was garbage collected"));
+      }
+      unregisterByJobId(id);
       jobs.delete(id);
     }
   }

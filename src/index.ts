@@ -60,7 +60,7 @@ export function createServer(): Server {
     if (!jobId) return;
     const job = jobStore.getJob(jobId);
     if (job?.status === "pending") {
-      (job as any).subprocess?.kill("SIGTERM");
+      job.subprocess?.kill("SIGTERM");
       jobStore.cancelJob(jobId);
     }
     unregisterRequest(requestId);

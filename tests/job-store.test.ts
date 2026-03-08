@@ -156,14 +156,15 @@ describe("GC expiry (sweepExpiredJobs)", () => {
     expect(getJob("gc-cancelled")).toBeUndefined();
   });
 
-  it("does NOT delete pending jobs even if old", () => {
+  it("deletes expired pending jobs and rejects their completion promise", async () => {
     createJob("gc-pending");
+    const completion = getJob("gc-pending")!.completion;
     getJob("gc-pending")!.createdAt = 0;
 
     sweepExpiredJobs();
 
-    // Pending jobs are never GC'd regardless of age
-    expect(getJob("gc-pending")).toBeDefined();
+    expect(getJob("gc-pending")).toBeUndefined();
+    await expect(completion).rejects.toThrow("Job timed out and was garbage collected");
   });
 
   it("does NOT delete recent completed jobs within TTL", () => {
