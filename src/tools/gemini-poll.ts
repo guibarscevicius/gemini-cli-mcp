@@ -30,6 +30,10 @@ export async function geminiPoll(input: unknown): Promise<GeminiPollOutput> {
       return { status: "error", error: job.error! };
     case "cancelled":
       return { status: "cancelled", error: job.error };
+    default: {
+      const _exhaustive: never = job.status;
+      throw new McpError(ErrorCode.InternalError, `Unhandled job status: ${String(_exhaustive)}`);
+    }
   }
 }
 

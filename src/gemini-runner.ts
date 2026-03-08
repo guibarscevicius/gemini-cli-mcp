@@ -13,6 +13,13 @@ export class GeminiOutputError extends Error {
   }
 }
 
+export class SemaphoreTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Gemini request timed out after ${timeoutMs}ms waiting for a concurrency slot`);
+    this.name = "SemaphoreTimeoutError";
+  }
+}
+
 // 300 s - allows Gemini 2.5 Pro deep-reasoning tasks (can take 2–3 min before first token)
 const TIMEOUT_MS = 300_000;
 
@@ -46,11 +53,7 @@ class Semaphore {
           const index = this.queue.indexOf(slot);
           if (index !== -1) {
             this.queue.splice(index, 1);
-            reject(
-              new Error(
-                `Gemini request timed out after ${timeoutMs}ms waiting for concurrency slot`
-              )
-            );
+            reject(new SemaphoreTimeoutError(timeoutMs));
           }
         }, timeoutMs);
       }

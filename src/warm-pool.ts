@@ -47,6 +47,8 @@ export class WarmProcessPool {
   private readonly ready: ReadyEntry[] = [];
   private readonly waiters: Waiter[] = [];
   private draining = false;
+  private consecutiveSpawnFailures = 0;
+  private static readonly MAX_CONSECUTIVE_FAILURES = 5;
 
   /**
    * @param poolSize   Number of processes to keep warm (default: GEMINI_MAX_CONCURRENT).
@@ -93,27 +95,44 @@ export class WarmProcessPool {
 
     // If the process exits while still in the ready queue (e.g. unexpected
     // crash or auth failure), remove it and replenish.
-    const onExitOrError = () => {
+    const onExitOrError = (err?: Error) => {
       clearInterval(keepAliveInterval);
       const idx = this.ready.findIndex((r) => r.wp === wp);
       if (idx !== -1) {
         this.ready.splice(idx, 1);
-        if (!this.draining) this._spawnAndEnqueue();
+        if (!this.draining) {
+          // Check for ENOENT (binary not found) — avoid infinite spawn loop
+          if ((err as { code?: string } | undefined)?.code === "ENOENT") {
+            this.consecutiveSpawnFailures++;
+            if (this.consecutiveSpawnFailures >= WarmProcessPool.MAX_CONSECUTIVE_FAILURES) {
+              process.stderr.write(
+                `[gemini-cli-mcp] warm pool: gemini binary not found — ` +
+                `pool disabled after ${WarmProcessPool.MAX_CONSECUTIVE_FAILURES} consecutive failures\n`
+              );
+              return; // stop replenishing
+            }
+          } else {
+            this.consecutiveSpawnFailures = 0;
+          }
+          this._spawnAndEnqueue();
+        }
       }
     };
 
-    cp.on("exit", onExitOrError);
-    cp.on("error", onExitOrError);
+    cp.on("exit", () => onExitOrError());
+    cp.on("error", (err) => onExitOrError(err));
 
     // If a caller is already waiting, hand it over immediately.
     const waiter = this.waiters.shift();
     if (waiter) {
       if (waiter.timer !== undefined) clearTimeout(waiter.timer);
       clearInterval(keepAliveInterval);
+      this.consecutiveSpawnFailures = 0;
       waiter.resolve(wp);
       // Spawn a replacement so pool capacity is maintained.
       if (!this.draining) this._spawnAndEnqueue();
     } else {
+      this.consecutiveSpawnFailures = 0;
       this.ready.push({ wp, keepAliveInterval });
     }
   }

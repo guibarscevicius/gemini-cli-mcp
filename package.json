@@ -1,6 +1,6 @@
 {
   "name": "gemini-cli-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Safe MCP server wrapping the official Gemini CLI — stateful sessions, no shell injection, subscription auth",
   "type": "module",
   "bin": {
@@ -9,6 +9,8 @@
   "files": [
     "dist"
   ],
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -26,12 +28,14 @@
     "model-context-protocol",
     "gemini-cli"
   ],
-  "author": "",
+  "author": "Gui Barscevicius",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "glob": "^13.0.6",
-    "node-pty": "^1.1.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
