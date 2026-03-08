@@ -4,10 +4,8 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { sessionStore } from "../session-store.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
-import { runGeminiAsync } from "./shared.js";
+import { runGeminiAsync, waitForJob, DEFAULT_WAIT_MS } from "./shared.js";
 import { registerRequest, unregisterRequest } from "../request-map.js";
-
-const WAIT_TIMEOUT = Symbol("wait-timeout");
 
 export const AskGeminiSchema = z.object({
   prompt: z.string().min(1).describe("The prompt to send to Gemini"),
@@ -42,10 +40,16 @@ export interface AskGeminiOutput {
   sessionId: string;
   pollIntervalMs: number;
   response?: string;
+  partialResponse?: string;
   timedOut?: boolean;
 }
 
-/** Start a new Gemini session. Returns immediately with { jobId, sessionId }; poll with gemini-poll. */
+/**
+ * Start a new Gemini session.
+ * Blocks and streams progress notifications when ctx.progressToken is set (MCP-native streaming).
+ * Also blocks when wait: true is passed explicitly (legacy mode).
+ * Returns immediately with { jobId, sessionId } otherwise.
+ */
 export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Promise<AskGeminiOutput> {
   const { prompt, model, cwd, wait, waitTimeoutMs } = AskGeminiSchema.parse(input);
 
@@ -59,7 +63,7 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
     registerRequest(ctx.requestId, jobId);
   }
 
-  // Background job — fire-and-forget in async mode, raced via job.completion in wait mode.
+  // Background job — fire-and-forget in async mode, raced via job.completion in wait/streaming mode.
   // This .then/.catch chain always owns request-map cleanup.
   runGeminiAsync(jobId, prompt, { model, cwd, tool: "ask-gemini" }, ctx)
     .then((response) => {
@@ -74,41 +78,44 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[gemini-cli-mcp] job ${jobId} failed: ${message}\n`);
-      jobStore.failJob(jobId, message);
-      sessionStore.clearPendingJob(sessionId);
-      if (ctx.requestId !== undefined) {
-        unregisterRequest(ctx.requestId);
+      try {
+        jobStore.failJob(jobId, message);
+        sessionStore.clearPendingJob(sessionId);
+      } finally {
+        if (ctx.requestId !== undefined) {
+          unregisterRequest(ctx.requestId);
+        }
       }
     });
 
-  if (wait === true) {
-    const job = jobStore.getJob(jobId)!;
-    const ms = waitTimeoutMs ?? 90_000;
-    let timerId: ReturnType<typeof setTimeout> | undefined;
-    const timer = new Promise<never>((_, rej) => {
-      timerId = setTimeout(() => rej(WAIT_TIMEOUT), ms);
-    });
+  // Block when the MCP client provides a progressToken (native streaming) or when wait: true.
+  const shouldBlock = wait === true || ctx.progressToken !== undefined;
 
+  if (shouldBlock) {
     try {
-      const response = await Promise.race([job.completion, timer]);
-      return { jobId, sessionId, response, pollIntervalMs: 2000 };
-    } catch (err) {
-      if (err === WAIT_TIMEOUT) {
-        process.stderr.write(`[gemini-cli-mcp] wait-mode timed out after ${ms}ms for job ${jobId} — falling back to async\n`);
-        return { jobId, sessionId, pollIntervalMs: 2000, timedOut: true };
+      const result = await waitForJob(jobId, waitTimeoutMs ?? DEFAULT_WAIT_MS);
+      // Stop the background onChunk from sending further notifications after the
+      // tool call returns. Works because onChunk checks ctx.progressToken before sending.
+      delete ctx.progressToken;
+      if (result.timedOut) {
+        return { jobId, sessionId, partialResponse: result.partialResponse, timedOut: true, pollIntervalMs: 2000 };
       }
+      return { jobId, sessionId, response: result.response, pollIntervalMs: 2000 };
+    } catch (err) {
+      // Stop the background onChunk from sending further notifications after the
+      // tool call returns. Works because onChunk checks ctx.progressToken before sending.
+      delete ctx.progressToken;
       throw new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
-    } finally {
-      if (timerId !== undefined) clearTimeout(timerId);
     }
   }
+
   return { jobId, sessionId, pollIntervalMs: 2000 };
 }
 
 export const askGeminiToolDefinition = {
   name: "ask-gemini" as const,
   description:
-    "Start a new conversation with Gemini. Returns immediately with { jobId, sessionId }. Poll with gemini-poll to get the response, or cancel with gemini-cancel.",
+    "Start a new conversation with Gemini. If the MCP client supports progress notifications (progressToken present), blocks and streams partial responses as notifications/progress events, then returns the final response inline. Otherwise returns immediately with { jobId, sessionId }; poll with gemini-poll or cancel with gemini-cancel.",
   inputSchema: {
     type: "object" as const,
     properties: {

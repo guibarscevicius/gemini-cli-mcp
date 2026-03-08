@@ -4,7 +4,7 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { sessionStore } from "../session-store.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
-import { runGeminiAsync } from "./shared.js";
+import { runGeminiAsync, waitForJob, DEFAULT_WAIT_MS } from "./shared.js";
 import { registerRequest, unregisterRequest } from "../request-map.js";
 
 export const GeminiReplySchema = z.object({
@@ -22,6 +22,16 @@ export const GeminiReplySchema = z.object({
     .describe(
       "Working directory for the Gemini subprocess. Required for any @file path — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected."
     ),
+  wait: z
+    .boolean()
+    .optional()
+    .describe("If true, block until done and return the response directly (default: false)"),
+  waitTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Timeout for wait mode in ms (default 90000). Falls back to async on timeout."),
 });
 
 export type GeminiReplyInput = z.infer<typeof GeminiReplySchema>;
@@ -29,14 +39,20 @@ export type GeminiReplyInput = z.infer<typeof GeminiReplySchema>;
 export interface GeminiReplyOutput {
   jobId: string;
   pollIntervalMs: number;
+  response?: string;
+  partialResponse?: string;
+  timedOut?: boolean;
 }
 
 /**
  * Continue an existing Gemini session.
+ * Blocks and streams progress notifications when ctx.progressToken is set (MCP-native streaming).
+ * Also blocks when wait: true is passed explicitly (legacy mode).
+ * Returns immediately with { jobId } otherwise.
  * Throws McpError(InvalidParams) when the session is unknown, expired, or has a pending job.
  */
 export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Promise<GeminiReplyOutput> {
-  const { sessionId, prompt, model, cwd } = GeminiReplySchema.parse(input);
+  const { sessionId, prompt, model, cwd, wait, waitTimeoutMs } = GeminiReplySchema.parse(input);
 
   const sessionExists = sessionStore.get(sessionId);
   if (!sessionExists) {
@@ -77,10 +93,34 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[gemini-cli-mcp] job ${jobId} failed: ${message}\n`);
-      jobStore.failJob(jobId, message);
-      sessionStore.clearPendingJob(sessionId);
-      if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
+      try {
+        jobStore.failJob(jobId, message);
+        sessionStore.clearPendingJob(sessionId);
+      } finally {
+        if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
+      }
     });
+
+  // Block when the MCP client provides a progressToken (native streaming) or when wait: true.
+  const shouldBlock = wait === true || ctx.progressToken !== undefined;
+
+  if (shouldBlock) {
+    try {
+      const result = await waitForJob(jobId, waitTimeoutMs ?? DEFAULT_WAIT_MS);
+      // Stop the background onChunk from sending further notifications after the
+      // tool call returns. Works because onChunk checks ctx.progressToken before sending.
+      delete ctx.progressToken;
+      if (result.timedOut) {
+        return { jobId, partialResponse: result.partialResponse, timedOut: true, pollIntervalMs: 2000 };
+      }
+      return { jobId, response: result.response, pollIntervalMs: 2000 };
+    } catch (err) {
+      // Stop the background onChunk from sending further notifications after the
+      // tool call returns. Works because onChunk checks ctx.progressToken before sending.
+      delete ctx.progressToken;
+      throw new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
+    }
+  }
 
   return { jobId, pollIntervalMs: 2000 };
 }
@@ -88,7 +128,7 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
 export const geminiReplyToolDefinition = {
   name: "gemini-reply" as const,
   description:
-    "Continue an existing Gemini conversation. Returns immediately with { jobId }. Poll with gemini-poll to get the response. Throws if the session has a pending job.",
+    "Continue an existing Gemini conversation. If the MCP client supports progress notifications (progressToken present), blocks and streams partial responses as notifications/progress events, then returns the final response inline. Otherwise returns immediately with { jobId }; poll with gemini-poll. Throws if the session has a pending job.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -109,6 +149,16 @@ export const geminiReplyToolDefinition = {
         type: "string",
         description:
           "Working directory for the subprocess. Required for any @file path (relative or absolute) — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected.",
+      },
+      wait: {
+        type: "boolean",
+        description:
+          "If true, block until done and return the response directly (default: false)",
+      },
+      waitTimeoutMs: {
+        type: "number",
+        description:
+          "Timeout for wait mode in ms (default 90000). Falls back to async on timeout.",
       },
     },
     required: ["sessionId", "prompt"],

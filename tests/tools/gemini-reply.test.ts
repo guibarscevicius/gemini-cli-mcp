@@ -25,12 +25,14 @@ vi.mock("../../src/job-store.js", () => ({
   appendChunk: vi.fn(),
   completeJob: vi.fn(),
   failJob: vi.fn(),
+  cancelJob: vi.fn(),
 }));
 
 import { runGemini } from "../../src/gemini-runner.js";
 import { sessionStore } from "../../src/session-store.js";
 import * as jobStore from "../../src/job-store.js";
 import { geminiReply } from "../../src/tools/gemini-reply.js";
+import { DEFAULT_WAIT_MS } from "../../src/tools/shared.js";
 
 const mockRunGemini = vi.mocked(runGemini);
 const mockStore = vi.mocked(sessionStore);
@@ -261,5 +263,122 @@ describe("geminiReply", () => {
     await expect(
       geminiReply({ sessionId: VALID_SESSION_ID, prompt: "" })
     ).rejects.toThrow(ZodError);
+  });
+
+  // ── progressToken (MCP-native streaming) ─────────────────────────────────────
+
+  it("progressToken in ctx auto-blocks and returns response inline", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("streamed reply"),
+    });
+    const result = await geminiReply(
+      { sessionId: VALID_SESSION_ID, prompt: "follow up" },
+      { progressToken: "tok-1", sendNotification: vi.fn().mockResolvedValue(undefined) }
+    );
+    expect(result).toMatchObject({
+      jobId: expect.any(String),
+      response: "streamed reply",
+      pollIntervalMs: 2000,
+    });
+    expect(result).not.toHaveProperty("partialResponse");
+  });
+
+  it("progressToken: sendNotification is called with notifications/progress payload per chunk", async () => {
+    const job = {
+      status: "pending" as const,
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("full response"),
+    };
+    mockJobStore.getJob.mockReturnValue(job);
+    mockJobStore.appendChunk.mockImplementation((_jobId: string, chunk: string) => {
+      job.partialResponse += chunk;
+    });
+    mockRunGemini.mockImplementation(
+      async (
+        _prompt: unknown,
+        _opts: unknown,
+        _executor: unknown,
+        onChunk: ((c: string) => void) | undefined
+      ) => {
+        onChunk?.("hello ");
+        onChunk?.("world");
+        return "full response";
+      }
+    );
+
+    const sendNotification = vi.fn().mockResolvedValue(undefined);
+    await geminiReply(
+      { sessionId: VALID_SESSION_ID, prompt: "follow up" },
+      { progressToken: "tok-notify", sendNotification }
+    );
+
+    expect(sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "notifications/progress",
+        params: expect.objectContaining({
+          progressToken: "tok-notify",
+          data: expect.objectContaining({ partialResponse: expect.any(String) }),
+        }),
+      })
+    );
+    expect(sendNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it("progressToken + timeout returns partialResponse and timedOut", async () => {
+    vi.useFakeTimers();
+    try {
+      mockJobStore.getJob.mockReturnValue({
+        status: "pending",
+        partialResponse: "partial text",
+        createdAt: Date.now(),
+        completion: new Promise<string>(() => {}), // never resolves
+      });
+
+      const resultPromise = geminiReply(
+        { sessionId: VALID_SESSION_ID, prompt: "follow up" },
+        { progressToken: "tok-2", sendNotification: vi.fn().mockResolvedValue(undefined) }
+      );
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_WAIT_MS + 1);
+      const result = await resultPromise;
+
+      expect(result).toMatchObject({
+        jobId: expect.any(String),
+        partialResponse: "partial text",
+        timedOut: true,
+        pollIntervalMs: 2000,
+      });
+      expect(result).not.toHaveProperty("response");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("no progressToken returns immediately without response", async () => {
+    const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "follow up" });
+    expect(result).not.toHaveProperty("response");
+    expect(result).not.toHaveProperty("partialResponse");
+  });
+
+  it("progressToken + job failure throws McpError", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.reject(new Error("subprocess crashed")),
+    });
+    await expect(
+      geminiReply(
+        { sessionId: VALID_SESSION_ID, prompt: "follow up" },
+        { progressToken: "tok-3", sendNotification: vi.fn().mockResolvedValue(undefined) }
+      )
+    ).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: expect.stringContaining("subprocess crashed"),
+    });
   });
 });
