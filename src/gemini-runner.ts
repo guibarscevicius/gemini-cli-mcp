@@ -4,6 +4,7 @@ import { readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as nodePath from "node:path";
 import { escape as escapeGlob, glob } from "glob";
+import { WarmProcessPool, type WarmProcess } from "./warm-pool.js";
 
 export class GeminiOutputError extends Error {
   constructor(message: string, public sanitizedMessage: string) {
@@ -74,6 +75,31 @@ if (!Number.isFinite(MAX_CONCURRENT) || MAX_CONCURRENT < 1) {
 }
 const QUEUE_TIMEOUT_MS = parseInt(process.env.GEMINI_QUEUE_TIMEOUT_MS ?? "60000", 10);
 const semaphore = new Semaphore(MAX_CONCURRENT);
+
+// ── Warm process pool ──────────────────────────────────────────────────────
+// Pre-spawns Gemini processes so the ~16 s startup cost is paid in advance.
+// Requests with a custom --model fall back to cold spawn (pool processes use
+// the default model).  Single @file refs also fall back (stdin mode cannot
+// forward the @file token to the CLI for workspace-aware resolution).
+//
+// Env vars:
+//   GEMINI_POOL_ENABLED  "1" (default) | "0" to disable
+//   GEMINI_POOL_SIZE     default = GEMINI_MAX_CONCURRENT
+const POOL_ENABLED = (process.env.GEMINI_POOL_ENABLED ?? "1") !== "0";
+const POOL_SIZE = parseInt(process.env.GEMINI_POOL_SIZE ?? String(MAX_CONCURRENT), 10);
+
+export let warmPool: WarmProcessPool | null = null;
+
+if (POOL_ENABLED) {
+  warmPool = new WarmProcessPool(
+    Number.isFinite(POOL_SIZE) && POOL_SIZE >= 1 ? POOL_SIZE : MAX_CONCURRENT,
+    ["--yolo", "--output-format", "stream-json"],
+    {
+      HOME: process.env.HOME ?? "",
+      PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    }
+  );
+}
 
 const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES ?? "3", 10);
 const RETRY_BASE_MS = parseInt(process.env.GEMINI_RETRY_BASE_MS ?? "1000", 10);
@@ -152,6 +178,115 @@ export type GeminiExecutor = (
   opts: { env: Record<string, string>; cwd?: string; timeout: number },
   onChunk?: (text: string) => void
 ) => Promise<{ stdout: string }>;
+
+/**
+ * Drive a pre-spawned warm process: write prompt to stdin, close it, then
+ * parse the NDJSON that flushes from stdout when the process exits.
+ *
+ * The warm process may have accumulated leading newlines from the keepalive
+ * timer; they appear in the user message content but do not affect response
+ * quality (the CLI ignores empty lines).
+ */
+export function runWithWarmProcess(
+  wp: WarmProcess,
+  prompt: string,
+  timeoutMs: number,
+  onChunk: ((text: string) => void) | undefined
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const cp = wp.cp;
+    let accumulated = "";
+    let lineBuffer = "";
+    let settled = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      fn();
+    };
+
+    timeoutHandle = setTimeout(() => {
+      try { cp.kill("SIGTERM"); } catch { /* already dead */ }
+      settle(() => reject(new Error(`Gemini warm process timed out after ${timeoutMs}ms`)));
+    }, timeoutMs);
+
+    cp.stdout?.on("data", (data: Buffer) => {
+      lineBuffer += data.toString("utf8");
+      const lines = lineBuffer.split("\n");
+      lineBuffer = lines.pop() ?? "";
+
+      for (const raw of lines) {
+        const trimmed = raw.trim();
+        if (!trimmed) continue;
+
+        let event: unknown;
+        try {
+          event = JSON.parse(trimmed);
+        } catch {
+          continue; // non-JSON line — skip
+        }
+
+        type StreamEvent = {
+          type?: string;
+          role?: string;
+          content?: string;
+          status?: string;
+          error?: unknown;
+          message?: string;
+        };
+        const e = event as StreamEvent;
+
+        if (e.type === "message" && e.role === "assistant" && typeof e.content === "string") {
+          accumulated += e.content;
+          onChunk?.(e.content);
+        } else if (e.type === "result") {
+          if (e.status === "success") {
+            settle(() => resolve(accumulated));
+          } else {
+            const errDetail =
+              typeof e.error === "string"
+                ? e.error
+                : typeof e.message === "string"
+                  ? e.message
+                  : "gemini result error";
+            settle(() => reject(new GeminiOutputError(errDetail, errDetail)));
+          }
+        } else if (e.type === "error") {
+          const errDetail = typeof e.message === "string" ? e.message : "gemini error event";
+          settle(() => reject(new GeminiOutputError(errDetail, errDetail)));
+        }
+      }
+    });
+
+    cp.on("error", (err) => {
+      settle(() => reject(new Error(`gemini warm process error: ${err.message}`, { cause: err })));
+    });
+
+    cp.on("close", (code, signal) => {
+      if (settled) return;
+      if (code === 0) {
+        settle(() => resolve(accumulated));
+      } else {
+        const reason = signal ? `signal ${signal}` : `code ${code}`;
+        settle(() =>
+          reject(
+            new GeminiOutputError(
+              `gemini warm process exited with ${reason}`,
+              `gemini warm process exited with ${reason}`
+            )
+          )
+        );
+      }
+    });
+
+    // Write prompt + EOF to trigger processing. Keepalive newlines may already
+    // be buffered in stdin; they are harmless to response content.
+    cp.stdin?.write(prompt + "\n");
+    cp.stdin?.end();
+  });
+}
 
 /**
  * Spawn `gemini` with `--output-format stream-json` and parse NDJSON events.
@@ -543,21 +678,30 @@ export async function runGemini(
     }
   }
 
-  const args: string[] = [
-    "--yolo",
-    "--output-format",
-    "stream-json",
-  ];
+  // Use warm pool when: pool is enabled, no custom model, and the expanded
+  // prompt has no remaining @file refs (single-ref prompts without cwd are
+  // left for the CLI to resolve; stdin mode cannot forward @-tokens).
+  const usePool =
+    POOL_ENABLED &&
+    warmPool !== null &&
+    !opts.model &&
+    countFileRefs(expandedPrompt) === 0;
 
-  if (opts.model) {
+  // Build cold-spawn args (only needed when not using the pool).
+  const args: string[] = usePool
+    ? []
+    : ["--yolo", "--output-format", "stream-json"];
+
+  if (!usePool && opts.model) {
     args.push("--model", opts.model);
   }
 
   // Large-prompt bypass: Linux MAX_ARG_STRLEN (~128 KB) caps any single exec argument.
   // Prompts above the threshold are written to a temp file and passed as @<path> so the
   // CLI reads from disk — completely bypasses the per-argument kernel limit.
+  // Not needed for the warm pool path (prompt is written to stdin, not as an exec arg).
   let tempPromptFile: string | null = null;
-  const bypassUsed = expandedPrompt.length > LARGE_PROMPT_THRESHOLD;
+  const bypassUsed = !usePool && expandedPrompt.length > LARGE_PROMPT_THRESHOLD;
   if (bypassUsed) {
     tempPromptFile = nodePath.join(
       os.tmpdir(),
@@ -577,116 +721,165 @@ export async function runGemini(
       "--prompt",
       `@${tempPromptFile}`
     );
-  } else {
+  } else if (!usePool) {
     args.push("--prompt", expandedPrompt);
   }
 
   let acquired = false;
+  const startTime = Date.now();
   try {
-    await semaphore.acquire(QUEUE_TIMEOUT_MS);
-    acquired = true;
-    const startTime = Date.now();
-
     let response: string;
     let retryCount = 0;
 
-    try {
-      ({ result: response, retryCount } = await withRetry(async () => {
-        let stdout: string;
-        try {
-          const result = await executor(
-            args,
-            {
-              // Restrict inherited environment to only what Gemini CLI needs for auth
-              env: {
-                HOME: homeDir,
-                PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-              },
-              // Sets subprocess working directory. For single @file prompts the CLI resolves
-              // the path relative to this; for 2+ @file prompts expandFileRefs() has already
-              // inlined the content above, so the CLI no longer needs to resolve @file itself.
-              cwd: opts.cwd,
-              timeout: TIMEOUT_MS,
-            },
-            onChunk
+    // Both paths respect GEMINI_MAX_CONCURRENT — the semaphore caps the number of
+    // in-flight Gemini subprocesses regardless of warm-pool vs cold-spawn mode.
+    await semaphore.acquire(QUEUE_TIMEOUT_MS);
+    acquired = true;
+
+    if (usePool) {
+      // ── Warm pool path ──────────────────────────────────────────────────
+      // Pool.acquire() is inside withRetry so each retry gets a fresh process.
+      try {
+        ({ result: response, retryCount } = await withRetry(async () => {
+          const wp = await warmPool!.acquire(QUEUE_TIMEOUT_MS);
+          return runWithWarmProcess(wp, expandedPrompt, TIMEOUT_MS, onChunk);
+        }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
+      } catch (err) {
+        const homeDirForTelemetry = process.env.HOME ?? "";
+        let telemetryError: string;
+        if (err instanceof GeminiOutputError) {
+          telemetryError = err.sanitizedMessage;
+        } else if (err instanceof Error) {
+          telemetryError = err.message;
+        } else {
+          telemetryError = String(err);
+        }
+        if (homeDirForTelemetry) {
+          telemetryError = telemetryError.split(homeDirForTelemetry).join("~");
+        }
+        const retryCountFromError =
+          typeof (err as { retryCount?: unknown }).retryCount === "number"
+            ? ((err as { retryCount: number }).retryCount ?? retryCount)
+            : retryCount;
+        if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
+          process.stderr.write(
+            JSON.stringify({
+              ts: new Date().toISOString(),
+              event: "gemini_request",
+              tool: opts.tool ?? null,
+              model: opts.model ?? "default",
+              promptBytes: expandedPrompt.length,
+              responseBytes: 0,
+              durationMs: Date.now() - startTime,
+              sessionId: opts.sessionId ?? null,
+              bypassUsed: false,
+              retryCount: retryCountFromError,
+              status: "error",
+              error: telemetryError,
+            }) + "\n"
           );
-          stdout = result.stdout;
-        } catch (err: unknown) {
-          // GeminiOutputError (from spawnGemini's NDJSON parser or test mocks): re-throw as-is.
-          if (err instanceof GeminiOutputError) throw err;
-
-          const execErr = err as { code?: string; stderr?: string; message?: string };
-
-          // ENOENT: gemini binary not on PATH.
-          if (execErr.code === "ENOENT") {
-            throw new Error(
-              "gemini binary not found. Is the Gemini CLI installed and on PATH?",
-              { cause: err }
+        }
+        throw err;
+      }
+    } else {
+      // ── Cold spawn path ─────────────────────────────────────────────────
+      try {
+        ({ result: response, retryCount } = await withRetry(async () => {
+          let stdout: string;
+          try {
+            const result = await executor(
+              args,
+              {
+                // Restrict inherited environment to only what Gemini CLI needs for auth
+                env: {
+                  HOME: homeDir,
+                  PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+                },
+                // Sets subprocess working directory. For single @file prompts the CLI resolves
+                // the path relative to this; for 2+ @file prompts expandFileRefs() has already
+                // inlined the content above, so the CLI no longer needs to resolve @file itself.
+                cwd: opts.cwd,
+                timeout: TIMEOUT_MS,
+              },
+              onChunk
             );
+            stdout = result.stdout;
+          } catch (err: unknown) {
+            // GeminiOutputError (from spawnGemini's NDJSON parser or test mocks): re-throw as-is.
+            if (err instanceof GeminiOutputError) throw err;
+
+            const execErr = err as { code?: string; stderr?: string; message?: string };
+
+            // ENOENT: gemini binary not on PATH.
+            if (execErr.code === "ENOENT") {
+              throw new Error(
+                "gemini binary not found. Is the Gemini CLI installed and on PATH?",
+                { cause: err }
+              );
+            }
+
+            // Errors with a `stderr` property are old-style execFile errors (or test mocks).
+            // Errors from spawnGemini are already properly formatted Error instances without `stderr`.
+            // Re-wrap if `stderr` present; otherwise pass through.
+            if (execErr.stderr !== undefined) {
+              const detail = execErr.stderr.trim() || execErr.message || String(err);
+              const workspaceHint = detail.includes("Path not in workspace")
+                ? " — pass cwd pointing to the project root containing your @file targets"
+                : "";
+              throw new Error(`gemini process failed: ${detail}${workspaceHint}`, { cause: err });
+            }
+
+            // Already-formatted errors from spawnGemini or other sources: re-throw.
+            throw err;
           }
 
-          // Errors with a `stderr` property are old-style execFile errors (or test mocks).
-          // Errors from spawnGemini are already properly formatted Error instances without `stderr`.
-          // Re-wrap if `stderr` present; otherwise pass through.
-          if (execErr.stderr !== undefined) {
-            const detail = execErr.stderr.trim() || execErr.message || String(err);
-            const workspaceHint = detail.includes("Path not in workspace")
-              ? " — pass cwd pointing to the project root containing your @file targets"
-              : "";
-            throw new Error(`gemini process failed: ${detail}${workspaceHint}`, { cause: err });
-          }
-
-          // Already-formatted errors from spawnGemini or other sources: re-throw.
-          throw err;
+          // executor returns accumulated response text directly (parsed from stream-json)
+          return stdout;
+        }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
+      } catch (err) {
+        const homeDirForTelemetry = process.env.HOME ?? "";
+        let telemetryError: string;
+        if (err instanceof GeminiOutputError) {
+          telemetryError = err.sanitizedMessage;
+        } else if (err instanceof Error) {
+          telemetryError = err.message;
+        } else {
+          telemetryError = String(err);
         }
 
-        // executor returns accumulated response text directly (parsed from stream-json)
-        return stdout;
-      }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
-    } catch (err) {
-      const homeDir = process.env.HOME ?? "";
-      let telemetryError: string;
-      if (err instanceof GeminiOutputError) {
-        telemetryError = err.sanitizedMessage;
-      } else if (err instanceof Error) {
-        telemetryError = err.message;
-      } else {
-        telemetryError = String(err);
+        // Sanitize telemetry: replace absolute home path with ~ to avoid leaking username.
+        // Use split/join instead of new RegExp(homeDir) — homeDir may contain regex
+        // metacharacters (e.g. /home/user.name) that would corrupt the pattern.
+        if (homeDirForTelemetry) {
+          telemetryError = telemetryError.split(homeDirForTelemetry).join("~");
+        }
+
+        const retryCountFromError =
+          typeof (err as { retryCount?: unknown }).retryCount === "number"
+            ? ((err as { retryCount: number }).retryCount ?? retryCount)
+            : retryCount;
+
+        if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
+          process.stderr.write(
+            JSON.stringify({
+              ts: new Date().toISOString(),
+              event: "gemini_request",
+              tool: opts.tool ?? null,
+              model: opts.model ?? "default",
+              promptBytes: expandedPrompt.length,
+              responseBytes: 0,
+              durationMs: Date.now() - startTime,
+              sessionId: opts.sessionId ?? null,
+              bypassUsed,
+              retryCount: retryCountFromError,
+              status: "error",
+              error: telemetryError,
+            }) + "\n"
+          );
+        }
+
+        throw err;
       }
-
-      // Sanitize telemetry: replace absolute home path with ~ to avoid leaking username.
-      // Use split/join instead of new RegExp(homeDir) — homeDir may contain regex
-      // metacharacters (e.g. /home/user.name) that would corrupt the pattern.
-      if (homeDir) {
-        telemetryError = telemetryError.split(homeDir).join("~");
-      }
-
-      const retryCountFromError =
-        typeof (err as { retryCount?: unknown }).retryCount === "number"
-          ? ((err as { retryCount: number }).retryCount ?? retryCount)
-          : retryCount;
-
-
-      if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
-        process.stderr.write(
-          JSON.stringify({
-            ts: new Date().toISOString(),
-            event: "gemini_request",
-            tool: opts.tool ?? null,
-            model: opts.model ?? "default",
-            promptBytes: expandedPrompt.length,
-            responseBytes: 0,
-            durationMs: Date.now() - startTime,
-            sessionId: opts.sessionId ?? null,
-            bypassUsed,
-            retryCount: retryCountFromError,
-            status: "error",
-            error: telemetryError,
-          }) + "\n"
-        );
-      }
-
-      throw err;
     }
 
     if (process.env.GEMINI_STRUCTURED_LOGS === "1") {

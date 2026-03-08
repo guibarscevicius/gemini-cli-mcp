@@ -1,14 +1,15 @@
 # gemini-cli-mcp — Claude Instructions
 
 ## Key source files
-- `src/gemini-runner.ts` — subprocess execution, semaphore, retry, telemetry
+- `src/gemini-runner.ts` — subprocess execution, warm pool integration, semaphore, retry, telemetry
+- `src/warm-pool.ts` — pre-spawned Gemini process pool (WarmProcessPool)
 - `src/session-store.ts` — SQLite-backed multi-turn session store (node:sqlite)
 - `src/tools/ask-gemini.ts`, `src/tools/gemini-reply.ts` — MCP tool handlers
 - `src/dispatcher.ts` — routes MCP tool calls + error handling
 
 ## Build & test
 - `npm run build` — tsc (must pass before commit)
-- `npm test` — vitest (118 tests; all must pass)
+- `npm test` — vitest (244 tests; all must pass)
 - SQLite emits `ExperimentalWarning` in test output — not an error, safe to ignore
 
 ## Testing patterns
@@ -28,3 +29,5 @@
 | `GEMINI_STRUCTURED_LOGS` | `0` | `1` = JSON telemetry lines to stderr |
 | `GEMINI_MAX_HISTORY_TURNS` | `20` | History sliding window (turn-pairs; 0=unlimited) |
 | `GEMINI_SESSION_DB` | `~/.gemini-cli-mcp/sessions.db` | SQLite path; `:memory:` = ephemeral |
+| `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only, for debugging) |
+| `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes |
