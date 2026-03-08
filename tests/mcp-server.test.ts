@@ -76,6 +76,8 @@ describe("MCP dispatcher (handleCallTool)", () => {
     const result = await handleCallTool("ask-gemini", { prompt: "hello" });
     expect(result.content[0].type).toBe("text");
     const parsed = JSON.parse(result.content[0].text);
+    expect(result.structuredContent).toBeDefined();
+    expect(result.structuredContent).toEqual(parsed);
     expect(parsed.jobId).toBe(VALID_JOB_ID);
     expect(parsed.sessionId).toBe("abc-123");
     expect(parsed.response).toBeUndefined();
@@ -98,6 +100,8 @@ describe("MCP dispatcher (handleCallTool)", () => {
       prompt: "follow up",
     });
     const parsed = JSON.parse(result.content[0].text);
+    expect(result.structuredContent).toBeDefined();
+    expect(result.structuredContent).toEqual(parsed);
     expect(parsed.jobId).toBe(VALID_JOB_ID);
     expect(parsed.response).toBeUndefined();
   });
@@ -107,6 +111,8 @@ describe("MCP dispatcher (handleCallTool)", () => {
   it("dispatches gemini-poll and returns JSON content", async () => {
     const result = await handleCallTool("gemini-poll", { jobId: VALID_JOB_ID });
     const parsed = JSON.parse(result.content[0].text);
+    expect(result.structuredContent).toBeDefined();
+    expect(result.structuredContent).toEqual(parsed);
     expect(parsed.status).toBe("done");
     expect(parsed.response).toBe("the answer");
   });
@@ -121,8 +127,37 @@ describe("MCP dispatcher (handleCallTool)", () => {
   it("dispatches gemini-cancel and returns JSON content", async () => {
     const result = await handleCallTool("gemini-cancel", { jobId: VALID_JOB_ID });
     const parsed = JSON.parse(result.content[0].text);
+    expect(result.structuredContent).toBeDefined();
+    expect(result.structuredContent).toEqual(parsed);
     expect(parsed.cancelled).toBe(true);
     expect(parsed.alreadyDone).toBe(false);
+  });
+
+  it("ask-gemini: structuredContent mirrors content JSON", async () => {
+    const result = await handleCallTool("ask-gemini", { prompt: "hello" });
+    expect(result.structuredContent).toBeDefined();
+    expect(result.structuredContent).toEqual(JSON.parse(result.content[0].text));
+  });
+
+  it("gemini-reply: structuredContent mirrors content JSON", async () => {
+    const result = await handleCallTool("gemini-reply", {
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      prompt: "hi",
+    });
+    expect(result.structuredContent).toBeDefined();
+    expect(result.structuredContent).toEqual(JSON.parse(result.content[0].text));
+  });
+
+  it("gemini-poll: structuredContent mirrors content JSON", async () => {
+    const result = await handleCallTool("gemini-poll", { jobId: VALID_JOB_ID });
+    expect(result.structuredContent).toBeDefined();
+    expect(result.structuredContent).toEqual(JSON.parse(result.content[0].text));
+  });
+
+  it("gemini-cancel: structuredContent mirrors content JSON", async () => {
+    const result = await handleCallTool("gemini-cancel", { jobId: VALID_JOB_ID });
+    expect(result.structuredContent).toBeDefined();
+    expect(result.structuredContent).toEqual(JSON.parse(result.content[0].text));
   });
 
   it("passes jobId to geminiCancel", async () => {
@@ -179,6 +214,18 @@ describe("MCP dispatcher (handleCallTool)", () => {
   it("isError response is not set for successful calls", async () => {
     const result = await handleCallTool("ask-gemini", { prompt: "hello" });
     expect(result.isError).toBeUndefined();
+  });
+
+  it("isError response does not include structuredContent", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      mockAskGemini.mockRejectedValue(new Error("boom"));
+      const result = await handleCallTool("ask-gemini", { prompt: "hello" });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 
   // ── ZodError → McpError(InvalidParams) ────────────────────────────────────

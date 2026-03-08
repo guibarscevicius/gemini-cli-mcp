@@ -76,7 +76,7 @@ describe("index wiring", () => {
     expect(mockHandleCallTool).toHaveBeenCalledWith(
       "ask-gemini",
       args,
-      expect.objectContaining({ progressToken: undefined })
+      expect.objectContaining({ progressToken: undefined, requestId: undefined })
     );
   });
 });

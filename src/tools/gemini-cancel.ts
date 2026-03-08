@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as jobStore from "../job-store.js";
+import { unregisterByJobId } from "../request-map.js";
 
 export const GeminiCancelSchema = z.object({
   jobId: z.string().uuid().describe("Job ID returned by ask-gemini or gemini-reply"),
@@ -24,9 +25,10 @@ export async function geminiCancel(input: unknown): Promise<GeminiCancelOutput> 
     return { cancelled: false, alreadyDone: true };
   }
 
-  job.subprocess?.kill("SIGTERM");
+  const killed = job.subprocess?.kill("SIGTERM") ?? false;
+  process.stderr.write(`[gemini-cli-mcp] gemini-cancel: job ${jobId} cancelled (SIGTERM delivered: ${killed})\n`);
   jobStore.cancelJob(jobId);
-
+  unregisterByJobId(jobId);
   return { cancelled: true, alreadyDone: false };
 }
 

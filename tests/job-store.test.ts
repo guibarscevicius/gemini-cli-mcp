@@ -76,6 +76,13 @@ describe("completeJob", () => {
   it("does nothing for unknown jobId", () => {
     completeJob("nope", "answer"); // no throw
   });
+
+  it("completeJob resolves the completion promise", async () => {
+    createJob("j3-resolve");
+    const completion = getJob("j3-resolve")!.completion;
+    completeJob("j3-resolve", "resolved response");
+    await expect(completion).resolves.toBe("resolved response");
+  });
 });
 
 describe("failJob", () => {
@@ -91,6 +98,13 @@ describe("failJob", () => {
   it("does nothing for unknown jobId", () => {
     failJob("nope", "err"); // no throw
   });
+
+  it("failJob rejects the completion promise", async () => {
+    createJob("j4-reject");
+    const completion = getJob("j4-reject")!.completion;
+    failJob("j4-reject", "some failure");
+    await expect(completion).rejects.toThrow("some failure");
+  });
 });
 
 describe("cancelJob", () => {
@@ -104,6 +118,13 @@ describe("cancelJob", () => {
 
   it("does nothing for unknown jobId", () => {
     cancelJob("nope"); // no throw
+  });
+
+  it('cancelJob rejects the completion promise with "Job was cancelled"', async () => {
+    createJob("j5-cancel");
+    const completion = getJob("j5-cancel")!.completion;
+    cancelJob("j5-cancel");
+    await expect(completion).rejects.toThrow("Job was cancelled");
   });
 });
 
@@ -135,14 +156,28 @@ describe("GC expiry (sweepExpiredJobs)", () => {
     expect(getJob("gc-cancelled")).toBeUndefined();
   });
 
-  it("does NOT delete pending jobs even if old", () => {
+  it("deletes expired pending jobs and rejects their completion promise", async () => {
     createJob("gc-pending");
+    const completion = getJob("gc-pending")!.completion;
     getJob("gc-pending")!.createdAt = 0;
 
     sweepExpiredJobs();
 
-    // Pending jobs are never GC'd regardless of age
-    expect(getJob("gc-pending")).toBeDefined();
+    expect(getJob("gc-pending")).toBeUndefined();
+    await expect(completion).rejects.toThrow("Job timed out and was garbage collected");
+  });
+
+  it("GC sweep calls unregisterByJobId for expired jobs", async () => {
+    const { registerRequest, getJobByRequestId, clearMap } = await import("../src/request-map.js");
+    clearMap();
+    createJob("gc-unregister");
+    registerRequest("req-gc", "gc-unregister");
+    getJob("gc-unregister")!.createdAt = 0;
+
+    sweepExpiredJobs();
+
+    expect(getJobByRequestId("req-gc")).toBeUndefined();
+    clearMap();
   });
 
   it("does NOT delete recent completed jobs within TTL", () => {

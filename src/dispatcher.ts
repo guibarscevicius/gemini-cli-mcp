@@ -13,12 +13,21 @@ import { geminiPoll } from "./tools/gemini-poll.js";
 import { geminiCancel } from "./tools/gemini-cancel.js";
 
 export interface ToolCallContext {
+  /**
+   * When both sendNotification and progressToken are provided, streaming chunks
+   * are forwarded as notifications/progress events. Either alone is silently ignored.
+   */
   sendNotification?: (n: unknown) => Promise<void>;
   progressToken?: string | number;
+  /** MCP JSON-RPC request id. When provided, the handler registers a requestId->jobId
+   *  mapping so notifications/cancelled can abort the right subprocess. The fire-and-forget
+   *  chain (or GC sweep) owns cleanup via unregisterRequest / unregisterByJobId. */
+  requestId?: string | number;
 }
 
 export type ToolResponse = {
   content: Array<{ type: "text"; text: string }>;
+  structuredContent?: Record<string, unknown>;
   isError?: true;
 };
 
@@ -40,22 +49,34 @@ export async function handleCallTool(
     switch (name) {
       case "ask-gemini": {
         const result = await askGemini(args, ctx);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result as unknown as Record<string, unknown>,
+        };
       }
 
       case "gemini-reply": {
         const result = await geminiReply(args, ctx);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result as unknown as Record<string, unknown>,
+        };
       }
 
       case "gemini-poll": {
         const result = await geminiPoll(args);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result as unknown as Record<string, unknown>,
+        };
       }
 
       case "gemini-cancel": {
         const result = await geminiCancel(args);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result as unknown as Record<string, unknown>,
+        };
       }
 
       default:
