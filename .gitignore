@@ -14,3 +14,6 @@ npm-debug.log*
 
 # Scratch/temp files — put one-off experiments here, never in the repo root
 scratch/
+
+# Internal development notes (test plans, session logs, personal paths)
+tasks/
