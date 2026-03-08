@@ -12,7 +12,10 @@ export async function runGeminiAsync(
   opts: { model?: string; cwd?: string; tool: string; sessionId?: string },
   ctx: ToolCallContext
 ): Promise<string> {
-  const job = jobStore.getJob(jobId)!;
+  const job = jobStore.getJob(jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${jobId}`);
+  }
 
   const onChunk = (chunk: string) => {
     jobStore.appendChunk(jobId, chunk);
@@ -23,9 +26,15 @@ export async function runGeminiAsync(
           progressToken: ctx.progressToken,
           progress: job.partialResponse.length,
           total: undefined,
+          // data is a custom extension beyond the MCP spec's progressToken/progress/total.
+          // Sends the full accumulated text so far (full-state semantics) so clients can
+          // display progress even if they missed earlier notifications.
           data: { partialResponse: job.partialResponse },
         },
-      }).catch(() => {});
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[gemini-cli-mcp] sendNotification failed for job ${jobId}: ${msg}\n`);
+      });
     }
   };
 
@@ -75,7 +84,10 @@ export async function waitForJob(
   jobId: string,
   timeoutMs: number = DEFAULT_WAIT_MS
 ): Promise<WaitResult> {
-  const job = jobStore.getJob(jobId)!;
+  const job = jobStore.getJob(jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${jobId}`);
+  }
   let timerId: ReturnType<typeof setTimeout> | undefined;
   const timer = new Promise<never>((_, rej) => {
     timerId = setTimeout(() => rej(WAIT_TIMEOUT), timeoutMs);
@@ -85,6 +97,8 @@ export async function waitForJob(
     return { response };
   } catch (err) {
     if (err === WAIT_TIMEOUT) {
+      job.subprocess?.kill("SIGTERM");
+      jobStore.cancelJob(jobId);
       process.stderr.write(
         `[gemini-cli-mcp] wait-mode timed out after ${timeoutMs}ms for job ${jobId} — falling back to async\n`
       );

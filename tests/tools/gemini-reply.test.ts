@@ -25,12 +25,14 @@ vi.mock("../../src/job-store.js", () => ({
   appendChunk: vi.fn(),
   completeJob: vi.fn(),
   failJob: vi.fn(),
+  cancelJob: vi.fn(),
 }));
 
 import { runGemini } from "../../src/gemini-runner.js";
 import { sessionStore } from "../../src/session-store.js";
 import * as jobStore from "../../src/job-store.js";
 import { geminiReply } from "../../src/tools/gemini-reply.js";
+import { DEFAULT_WAIT_MS } from "../../src/tools/shared.js";
 
 const mockRunGemini = vi.mocked(runGemini);
 const mockStore = vi.mocked(sessionStore);
@@ -284,33 +286,76 @@ describe("geminiReply", () => {
     expect(result).not.toHaveProperty("partialResponse");
   });
 
-  it("progressToken + timeout returns partialResponse and timedOut", async () => {
-    vi.useFakeTimers();
-    mockJobStore.getJob.mockReturnValue({
-      status: "pending",
-      partialResponse: "partial text",
+  it("progressToken: sendNotification is called with notifications/progress payload per chunk", async () => {
+    const job = {
+      status: "pending" as const,
+      partialResponse: "",
       createdAt: Date.now(),
-      completion: new Promise<string>(() => {}), // never resolves
+      completion: Promise.resolve("full response"),
+    };
+    mockJobStore.getJob.mockReturnValue(job);
+    mockJobStore.appendChunk.mockImplementation((_jobId: string, chunk: string) => {
+      job.partialResponse += chunk;
     });
-
-    const resultPromise = geminiReply(
-      { sessionId: VALID_SESSION_ID, prompt: "follow up" },
-      { progressToken: "tok-2", sendNotification: vi.fn().mockResolvedValue(undefined) }
+    mockRunGemini.mockImplementation(
+      async (
+        _prompt: unknown,
+        _opts: unknown,
+        _executor: unknown,
+        onChunk: ((c: string) => void) | undefined
+      ) => {
+        onChunk?.("hello ");
+        onChunk?.("world");
+        return "full response";
+      }
     );
 
-    // Advance past DEFAULT_WAIT_MS (90 000 ms) to trigger the timeout
-    await vi.advanceTimersByTimeAsync(90_001);
-    const result = await resultPromise;
+    const sendNotification = vi.fn().mockResolvedValue(undefined);
+    await geminiReply(
+      { sessionId: VALID_SESSION_ID, prompt: "follow up" },
+      { progressToken: "tok-notify", sendNotification }
+    );
 
-    vi.useRealTimers();
+    expect(sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "notifications/progress",
+        params: expect.objectContaining({
+          progressToken: "tok-notify",
+          data: expect.objectContaining({ partialResponse: expect.any(String) }),
+        }),
+      })
+    );
+    expect(sendNotification).toHaveBeenCalledTimes(2);
+  });
 
-    expect(result).toMatchObject({
-      jobId: expect.any(String),
-      partialResponse: "partial text",
-      timedOut: true,
-      pollIntervalMs: 2000,
-    });
-    expect(result).not.toHaveProperty("response");
+  it("progressToken + timeout returns partialResponse and timedOut", async () => {
+    vi.useFakeTimers();
+    try {
+      mockJobStore.getJob.mockReturnValue({
+        status: "pending",
+        partialResponse: "partial text",
+        createdAt: Date.now(),
+        completion: new Promise<string>(() => {}), // never resolves
+      });
+
+      const resultPromise = geminiReply(
+        { sessionId: VALID_SESSION_ID, prompt: "follow up" },
+        { progressToken: "tok-2", sendNotification: vi.fn().mockResolvedValue(undefined) }
+      );
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_WAIT_MS + 1);
+      const result = await resultPromise;
+
+      expect(result).toMatchObject({
+        jobId: expect.any(String),
+        partialResponse: "partial text",
+        timedOut: true,
+        pollIntervalMs: 2000,
+      });
+      expect(result).not.toHaveProperty("response");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("no progressToken returns immediately without response", async () => {

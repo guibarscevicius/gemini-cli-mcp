@@ -78,10 +78,13 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[gemini-cli-mcp] job ${jobId} failed: ${message}\n`);
-      jobStore.failJob(jobId, message);
-      sessionStore.clearPendingJob(sessionId);
-      if (ctx.requestId !== undefined) {
-        unregisterRequest(ctx.requestId);
+      try {
+        jobStore.failJob(jobId, message);
+        sessionStore.clearPendingJob(sessionId);
+      } finally {
+        if (ctx.requestId !== undefined) {
+          unregisterRequest(ctx.requestId);
+        }
       }
     });
 
@@ -91,11 +94,17 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
   if (shouldBlock) {
     try {
       const result = await waitForJob(jobId, waitTimeoutMs ?? DEFAULT_WAIT_MS);
+      // Stop the background onChunk from sending further notifications after the
+      // tool call returns. Works because onChunk checks ctx.progressToken before sending.
+      delete ctx.progressToken;
       if (result.timedOut) {
         return { jobId, sessionId, partialResponse: result.partialResponse, timedOut: true, pollIntervalMs: 2000 };
       }
       return { jobId, sessionId, response: result.response, pollIntervalMs: 2000 };
     } catch (err) {
+      // Stop the background onChunk from sending further notifications after the
+      // tool call returns. Works because onChunk checks ctx.progressToken before sending.
+      delete ctx.progressToken;
       throw new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
     }
   }
