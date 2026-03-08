@@ -80,7 +80,7 @@ const QUEUE_TIMEOUT_MS = parseInt(process.env.GEMINI_QUEUE_TIMEOUT_MS ?? "60000"
 const semaphore = new Semaphore(MAX_CONCURRENT);
 
 // ── Warm process pool ──────────────────────────────────────────────────────
-// Pre-spawns Gemini processes so the ~16 s startup cost is paid in advance.
+// Pre-spawns Gemini processes so the ~12–17 s cold-start cost is paid in advance.
 // Requests with a custom --model fall back to cold spawn (pool processes use
 // the default model).  Single @file refs also fall back (stdin mode cannot
 // forward the @file token to the CLI for workspace-aware resolution).

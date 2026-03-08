@@ -108,10 +108,11 @@ Input:
   waitTimeoutMs number  Optional. Max ms to wait when wait=true (default: 90000).
 
 Output:
-  jobId         string
-  sessionId     string
-  pollIntervalMs number
-  response      string   (blocking mode only)
+  jobId           string
+  pollIntervalMs  number
+  response        string   (blocking mode — done)
+  partialResponse string   (blocking mode — timeout)
+  timedOut        true     (blocking mode — timeout)
 ```
 
 Sessions auto-expire after 60 minutes of inactivity.
@@ -203,7 +204,7 @@ ask_gemini({
 })
 ```
 
-**Multiple files in one prompt** — when `cwd` is provided, the server expands all `@file` tokens itself before sending to the CLI:
+**Multiple files in one prompt** — when `cwd` is provided and the prompt contains two or more `@file` tokens, the server expands them itself before sending to the CLI:
 ```javascript
 ask_gemini({
   prompt: "Compare @src/auth.ts and @src/session.ts for consistency.",
@@ -219,7 +220,7 @@ ask_gemini({
 })
 ```
 
-**Without `cwd`** — only a single `@file` is supported (passed directly to the CLI). Multiple `@file` tokens without `cwd` will raise an error.
+**Without `cwd`** — only a single `@file` is supported (passed directly to the CLI). Multiple `@file` tokens without `cwd` raise an error. A single `@file` with `cwd` is also forwarded to the CLI unchanged — server expansion only activates for two or more tokens.
 
 ## Multi-turn example
 
@@ -262,7 +263,7 @@ All variables are optional.
 | `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only, for debugging). |
 | `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes. |
 | `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms) — prompt writes delayed by this. |
-| `GEMINI_JOB_TTL_MS` | `3600000` | How long completed/failed/cancelled jobs are retained (ms). |
+| `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained (ms). |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |
 
 ## Troubleshooting
