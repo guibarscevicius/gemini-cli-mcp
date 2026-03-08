@@ -9,7 +9,7 @@
 
 ## Build & test
 - `npm run build` — tsc (must pass before commit)
-- `npm test` — vitest (244 tests; all must pass)
+- `npm test` — vitest (263 tests; all must pass)
 - SQLite emits `ExperimentalWarning` in test output — not an error, safe to ignore
 
 ## Testing patterns
@@ -29,5 +29,8 @@
 | `GEMINI_STRUCTURED_LOGS` | `0` | `1` = JSON telemetry lines to stderr |
 | `GEMINI_MAX_HISTORY_TURNS` | `20` | History sliding window (turn-pairs; 0=unlimited) |
 | `GEMINI_SESSION_DB` | `~/.gemini-cli-mcp/sessions.db` | SQLite path; `:memory:` = ephemeral |
+| `GEMINI_CACHE_TTL_MS` | `300000` | Response cache TTL (ms); `0` = disabled |
+| `GEMINI_CACHE_MAX_ENTRIES` | `50` | Max entries in the response cache |
 | `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only, for debugging) |
 | `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes |
+| `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms); prompt writes delayed until this age after spawn |

@@ -10,6 +10,11 @@
  * all buffered NDJSON to stdout in one shot.  A replacement process is spawned
  * immediately so the pool is replenished for the next request.
  *
+ * Each WarmProcess carries a `readyAt` timestamp (spawnedAt + startupMs).
+ * runWithWarmProcess() delays the prompt write until that timestamp so the CLI
+ * has time to fully initialize before receiving input.  The delay is zero for
+ * processes that have already aged past startupMs (steady-state requests).
+ *
  * Measured latency improvement (vs cold spawn):
  *   cold spawn  → first-byte ~13.6 s, total ~17 s
  *   warm process → first-byte ~0.9 s, total ~4.4 s  (≈ 12 s savings)
@@ -23,6 +28,8 @@ const KEEPALIVE_INTERVAL_MS = 5_000;
 export interface WarmProcess {
   cp: ChildProcess;
   pid: number | undefined;
+  /** Absolute timestamp (Date.now()) after which the CLI is expected to be fully started. */
+  readyAt: number;
 }
 
 type Waiter = {
@@ -45,11 +52,15 @@ export class WarmProcessPool {
    * @param poolSize   Number of processes to keep warm (default: GEMINI_MAX_CONCURRENT).
    * @param baseArgs   Args to pass to every spawned `gemini` process (no --prompt).
    * @param env        Restricted env for the subprocess (HOME + PATH).
+   * @param startupMs  Estimated CLI startup time (ms).  Prompt writes are delayed until
+   *                   this many ms after spawn, so the CLI is ready to process input.
+   *                   Defaults to 0 (no delay) — production code passes the env-configured value.
    */
   constructor(
     private readonly poolSize: number,
     private readonly baseArgs: string[],
-    private readonly env: Record<string, string>
+    private readonly env: Record<string, string>,
+    private readonly startupMs: number = 0
   ) {
     for (let i = 0; i < poolSize; i++) {
       this._spawnAndEnqueue();
@@ -68,7 +79,7 @@ export class WarmProcessPool {
     // Drain stderr so a full pipe buffer never stalls the subprocess.
     cp.stderr?.on("data", () => {});
 
-    const wp: WarmProcess = { cp, pid: cp.pid };
+    const wp: WarmProcess = { cp, pid: cp.pid, readyAt: Date.now() + this.startupMs };
 
     // Keepalive: send a bare newline every KEEPALIVE_INTERVAL_MS so the CLI
     // does not exit with "No input provided via stdin" after ~14 s idle.
