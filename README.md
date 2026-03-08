@@ -4,38 +4,35 @@
 [![CI](https://github.com/guibarscevicius/gemini-cli-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/guibarscevicius/gemini-cli-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A safe, auditable MCP server that wraps the official [`@google/gemini-cli`](https://github.com/google-gemini/gemini-cli) for use with Claude Code (and any MCP-compatible host).
+An MCP server that wraps the official [`@google/gemini-cli`](https://github.com/google-gemini/gemini-cli), exposing Gemini to Claude Code and any MCP-compatible host. Supports stateful multi-turn sessions, async jobs, response streaming, and a warm process pool for low-latency responses.
 
-**Why this exists:** The only previous npm package doing this (`gemini-mcp-tool`) has an unpatched CVSS 9.8 command injection CVE and has been abandoned since July 2025. This project fixes the underlying class of vulnerability and adds stateful multi-turn sessions.
+## Security
 
-## Security properties
-
-| Property | How it's achieved |
-|----------|-------------------|
+| Property | Implementation |
+|----------|----------------|
 | No shell injection | `execFile()` passes args as an array directly to `execve` — no shell is invoked |
-| No arg concatenation | Args array is built programmatically; user input is always a single element, never spliced into a string |
-| Env isolation | Subprocess inherits only `HOME` and `PATH` — your API keys and secrets stay out |
-| No hanging | `--yolo` auto-approves Gemini's own tool use (web search, code execution) |
-| Structured output | `--output-format stream-json` gives reliable streaming NDJSON output |
+| No arg concatenation | Args array is built programmatically; user input is always a single element |
+| Env isolation | Subprocess inherits only `HOME` and `PATH` |
+| Structured output | `--output-format stream-json` produces reliable streaming NDJSON |
 
 ## Prerequisites
 
-- **Node.js ≥ 24** (Active LTS) — [nodejs.org/en/download](https://nodejs.org/en/download)
+- **Node.js ≥ 24** — [nodejs.org/en/download](https://nodejs.org/en/download)
+- **Gemini CLI** installed and authenticated:
 
-1. Install and authenticate the Gemini CLI:
-   ```bash
-   npm install -g @google/gemini-cli
-   gemini  # follow the auth flow (subscription — no billing)
-   ```
+```bash
+npm install -g @google/gemini-cli
+gemini  # follow the auth flow (Google subscription — no billing required)
+```
 
-2. Verify it works:
-   ```bash
-   gemini --prompt "hello" --output-format stream-json
-   ```
+Verify it works:
+```bash
+gemini --prompt "hello" --output-format stream-json
+```
 
-## Claude Code configuration
+## Installation
 
-### Once published to npm — npx (recommended)
+### npx (recommended)
 
 ```json
 {
@@ -48,7 +45,9 @@ A safe, auditable MCP server that wraps the official [`@google/gemini-cli`](http
 }
 ```
 
-### Local development — direct node
+Add to `~/.claude/settings.json` for Claude Code CLI, or your host's MCP config file.
+
+### Local development
 
 ```json
 {
@@ -61,9 +60,7 @@ A safe, auditable MCP server that wraps the official [`@google/gemini-cli`](http
 }
 ```
 
-Add to `~/.claude/settings.json` for Claude Code CLI, or your host's MCP config file.
-
-> **Model compatibility note (Gemini CLI ≥ 0.31):** The CLI forces `include_thoughts` for models that support thinking. `gemini-2.0-flash` triggers a 400 error due to this. Recommended: `gemini-3-flash-preview` (fast, default), `gemini-3.1-pro-preview` (deep reasoning), `gemini-3.1-flash-lite` (cost-efficient). `gemini-3-pro-preview` was shut down March 9 2026 — migrate away.
+> **Model compatibility (Gemini CLI ≥ 0.31):** The CLI forces `include_thoughts` for models that support thinking. Recommended models: `gemini-3-flash-preview` (fast, default), `gemini-3.1-pro-preview` (deep reasoning), `gemini-3.1-flash-lite` (cost-efficient).
 
 ## Tools
 
@@ -74,45 +71,45 @@ Input:
   prompt        string   Required. The message to send.
   model         string   Optional. E.g. "gemini-3-flash-preview". Defaults to CLI default.
   cwd           string   Optional. Working directory — required for any @file path.
-  wait          boolean  Optional. If true, block until done and return response inline (default: false).
-  waitTimeoutMs number   Optional. Max ms to wait when wait=true (default: 90000). Falls back to async on timeout.
+  wait          boolean  Optional. Block until done and return response inline (default: false).
+  waitTimeoutMs number   Optional. Max ms to wait when wait=true (default: 90000).
 
-Output (async mode — default):
-  jobId         string   Poll with gemini-poll or cancel with gemini-cancel.
-  sessionId     string   Use with gemini-reply for multi-turn conversations.
-  pollIntervalMs number  Suggested polling interval in ms (2000).
+Output (async — default):
+  jobId          string   Poll with gemini-poll or cancel with gemini-cancel.
+  sessionId      string   Use with gemini-reply for multi-turn conversations.
+  pollIntervalMs number   Suggested polling interval in ms (2000).
 
-Output (blocking mode — wait: true):
-  jobId         string
-  sessionId     string
-  response      string   Gemini's complete response.
+Output (wait: true — done):
+  jobId          string
+  sessionId      string
+  response       string   Gemini's complete response.
   pollIntervalMs number
 
-Output (blocking mode — timeout):
-  jobId         string
-  sessionId     string
-  partialResponse string  Partial output collected before timeout (may be empty).
-  timedOut      true
-  pollIntervalMs number
+Output (wait: true — timeout):
+  jobId           string
+  sessionId       string
+  partialResponse string   Partial output collected before timeout (may be empty).
+  timedOut        true
+  pollIntervalMs  number
 ```
 
 ### `gemini-reply` — continue an existing session
 
 ```
 Input:
-  sessionId  string   Required. Returned by ask-gemini.
-  prompt     string   Required. Follow-up message.
-  model      string   Optional. Override the model for this turn.
-  cwd        string   Optional. Working directory for relative @file paths.
-  wait       boolean  Optional. If true, block until done (default: false).
-  waitTimeoutMs number  Optional. Max ms to wait when wait=true (default: 90000).
+  sessionId     string   Required. Returned by ask-gemini.
+  prompt        string   Required. Follow-up message.
+  model         string   Optional. Override the model for this turn.
+  cwd           string   Optional. Working directory for relative @file paths.
+  wait          boolean  Optional. Block until done (default: false).
+  waitTimeoutMs number   Optional. Max ms to wait when wait=true (default: 90000).
 
 Output:
   jobId           string
   pollIntervalMs  number
-  response        string   (blocking mode — done)
-  partialResponse string   (blocking mode — timeout)
-  timedOut        true     (blocking mode — timeout)
+  response        string   (wait: true — done)
+  partialResponse string   (wait: true — timeout)
+  timedOut        true     (wait: true — timeout)
 ```
 
 Sessions auto-expire after 60 minutes of inactivity.
@@ -124,9 +121,9 @@ Input:
   jobId   string   Required. From ask-gemini or gemini-reply output.
 
 Output (pending):
-  jobId          string
-  status         "pending"
-  partialResponse string  Partial output accumulated so far.
+  jobId           string
+  status          "pending"
+  partialResponse string   Partial output accumulated so far.
 
 Output (done):
   jobId    string
@@ -153,7 +150,7 @@ Input:
 Output:
   jobId       string
   cancelled   boolean   true if the running subprocess was killed.
-  alreadyDone boolean   true if the job had already completed/failed before cancel arrived.
+  alreadyDone boolean   true if the job had already completed before cancel arrived.
 ```
 
 ## Async workflow
@@ -168,11 +165,11 @@ const { jobId, sessionId } = await ask_gemini({
 })
 
 // Poll until done (typically 4–20 s)
-let result;
+let result
 do {
-  await new Promise(r => setTimeout(r, 2000));
-  result = await gemini_poll({ jobId });
-} while (result.status === "pending");
+  await new Promise(r => setTimeout(r, 2000))
+  result = await gemini_poll({ jobId })
+} while (result.status === "pending")
 
 // Continue the conversation
 const { jobId: j2 } = await gemini_reply({
@@ -181,7 +178,7 @@ const { jobId: j2 } = await gemini_reply({
 })
 ```
 
-For simple one-shot requests, use `wait: true` to block until complete:
+For simple one-shot requests, use `wait: true`:
 
 ```javascript
 const { response } = await ask_gemini({
@@ -194,17 +191,14 @@ const { response } = await ask_gemini({
 
 The server supports `@file` references to inject file contents directly into the prompt.
 
-> **Always pass `cwd`** — the server enforces a workspace boundary at `cwd`; any `@file` path that resolves outside the tree is rejected with `Path not in workspace`. Pass `cwd` equal to the root of the project containing your target files.
+> **Always pass `cwd`** — the server enforces a workspace boundary at `cwd`. Any `@file` path that resolves outside the tree is rejected with `Path not in workspace`.
 
-**Single file (relative path):**
+**Single file:**
 ```javascript
-ask_gemini({
-  prompt: "Review this file: @src/auth.ts",
-  cwd: "/path/to/your/project"
-})
+ask_gemini({ prompt: "Review this file: @src/auth.ts", cwd: "/path/to/your/project" })
 ```
 
-**Multiple files in one prompt** — when `cwd` is provided and the prompt contains two or more `@file` tokens, the server expands them itself before sending to the CLI:
+**Multiple files** — when two or more `@file` tokens are present and `cwd` is provided, the server expands them before sending to the CLI:
 ```javascript
 ask_gemini({
   prompt: "Compare @src/auth.ts and @src/session.ts for consistency.",
@@ -212,7 +206,7 @@ ask_gemini({
 })
 ```
 
-**Glob patterns** — expand all matching files:
+**Glob patterns:**
 ```javascript
 ask_gemini({
   prompt: "Review all TypeScript files: @src/**/*.ts",
@@ -220,18 +214,18 @@ ask_gemini({
 })
 ```
 
-**Without `cwd`** — only a single `@file` is supported (passed directly to the CLI). Multiple `@file` tokens without `cwd` raise an error. A single `@file` with `cwd` is also forwarded to the CLI unchanged — server expansion only activates for two or more tokens.
+Without `cwd`, only a single `@file` is supported (passed directly to the CLI). Multiple `@file` tokens without `cwd` raise an error.
 
 ## Multi-turn example
 
 ```javascript
-// Turn 1 — start a session
+// Turn 1
 const { sessionId } = await ask_gemini({
   prompt: "What is the time complexity of merge sort?",
   wait: true
 })
 
-// Turn 2 — Gemini remembers the previous exchange
+// Turn 2 — Gemini has full context of the previous exchange
 const { response } = await gemini_reply({
   sessionId,
   prompt: "And how does that compare to quicksort in practice?",
@@ -241,9 +235,9 @@ const { response } = await gemini_reply({
 
 ## Performance
 
-The server pre-spawns Gemini CLI processes (warm pool) to eliminate the ~12 s cold-start cost. First requests after server start arrive in ~4–5 s once the pool has warmed up (~12 s after startup).
+The server pre-spawns Gemini CLI processes (warm pool) to eliminate the ~12 s cold-start cost. First requests arrive in ~4–5 s once the pool has warmed up (~12 s after server start).
 
-Set `GEMINI_POOL_STARTUP_MS` if your machine's CLI startup is faster or slower. Disable the pool with `GEMINI_POOL_ENABLED=0` for debugging or resource-constrained environments.
+Set `GEMINI_POOL_STARTUP_MS` to match your machine's CLI startup time. Disable the pool with `GEMINI_POOL_ENABLED=0` for debugging.
 
 ## Environment variables
 
@@ -255,14 +249,14 @@ All variables are optional.
 | `GEMINI_RETRY_BASE_MS` | `1000` | Base delay for exponential backoff (doubles each retry). |
 | `GEMINI_MAX_CONCURRENT` | `2` | Max parallel Gemini subprocesses. |
 | `GEMINI_QUEUE_TIMEOUT_MS` | `60000` | Max wait for a concurrency slot (ms). |
-| `GEMINI_STRUCTURED_LOGS` | `0` | `1` = JSON telemetry line to stderr per request. |
+| `GEMINI_STRUCTURED_LOGS` | `0` | `1` = emit one JSON telemetry line to stderr per request. |
 | `GEMINI_MAX_HISTORY_TURNS` | `20` | Session history window (turn-pairs). `0` = unlimited. |
-| `GEMINI_SESSION_DB` | `~/.gemini-cli-mcp/sessions.db` | SQLite path. `:memory:` = ephemeral. (Path uses the unscoped name for backward compat.) |
+| `GEMINI_SESSION_DB` | `~/.gemini-cli-mcp/sessions.db` | SQLite path. `:memory:` = ephemeral. |
 | `GEMINI_CACHE_TTL_MS` | `300000` | Response cache TTL (ms). `0` = disabled. |
 | `GEMINI_CACHE_MAX_ENTRIES` | `50` | Max entries in the response cache. |
-| `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only, for debugging). |
+| `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only). |
 | `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes. |
-| `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms) — prompt writes delayed by this. |
+| `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms). Prompt writes are delayed by this amount after spawn. |
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained (ms). |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |
 
@@ -270,19 +264,19 @@ All variables are optional.
 
 **`gemini binary not found`** — Install the Gemini CLI: `npm install -g @google/gemini-cli`
 
-**`HOME environment variable is not set`** — The Gemini CLI needs `HOME` to find OAuth credentials (`~/.config/gemini`).
+**`HOME environment variable is not set`** — The Gemini CLI needs `HOME` to locate OAuth credentials (`~/.config/gemini`).
 
-**`Path not in workspace`** — Always pass `cwd` equal to the root of your project when using `@file` paths.
+**`Path not in workspace`** — Pass `cwd` equal to the root of your project when using `@file` paths.
 
-**`Gemini request timed out waiting for a concurrency slot`** — Too many parallel requests. Increase `GEMINI_MAX_CONCURRENT` or reduce request frequency.
+**`Gemini request timed out waiting for a concurrency slot`** — Increase `GEMINI_MAX_CONCURRENT` or reduce request concurrency.
 
-**Sessions expire** — Sessions auto-expire after 60 minutes of inactivity. Start a fresh session with `ask-gemini`.
+**Sessions expire** — Sessions auto-expire after 60 minutes of inactivity. Start a new session with `ask-gemini`.
 
-**Warm pool not warming up** — Check stderr for `gemini binary not found` messages. If the pool detects 5 consecutive spawn failures it disables itself and logs a clear message.
+**Warm pool not starting** — Check stderr for `gemini binary not found`. After 5 consecutive spawn failures the pool disables itself and logs a diagnostic message.
 
 ## How sessions work
 
-Since `gemini --resume <id>` is scoped to a project directory and cannot be used from a global MCP server, this server manages conversation history in a local SQLite store (`node:sqlite`). On each `gemini-reply` call, prior turns are prepended as a structured context block:
+The server manages conversation history in a local SQLite store (`node:sqlite`). On each `gemini-reply` call, prior turns are prepended as a structured context block:
 
 ```
 [Conversation history]
@@ -294,8 +288,6 @@ Assistant: <turn 1 response>
 <new prompt>
 ```
 
-This is equivalent to how most LLM wrappers implement multi-turn: resend the full history with each request.
-
 ## Development
 
 ```bash
@@ -303,17 +295,12 @@ git clone https://github.com/guibarscevicius/gemini-cli-mcp.git
 cd gemini-cli-mcp
 npm install
 npm run build
-
-# Smoke test
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | node dist/index.js
+npm test
 ```
 
+Smoke test:
 ```bash
-# Run tests
-npm test
-
-# Watch mode
-npm run test:watch
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | node dist/index.js
 ```
 
 ## License
