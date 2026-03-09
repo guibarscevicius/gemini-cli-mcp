@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -110,7 +111,7 @@ async function main() {
 
 const isEntrypoint =
   typeof process.argv[1] === "string" &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  realpathSync(resolve(process.argv[1])) === fileURLToPath(import.meta.url);
 
 if (isEntrypoint) {
   main().catch((err) => {
