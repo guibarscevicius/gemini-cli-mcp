@@ -303,6 +303,8 @@ Smoke test:
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | node dist/index.js
 ```
 
+> **Note:** `npx @guibarscevicius/gemini-cli-mcp` will not work from inside this repo. npm's Arborist sees the local `package.json` matches the package name and skips installation. Use `node dist/index.js` directly when developing.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
