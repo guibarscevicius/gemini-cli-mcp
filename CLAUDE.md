@@ -4,13 +4,32 @@
 - `src/gemini-runner.ts` — subprocess execution, warm pool integration, semaphore, retry, telemetry
 - `src/warm-pool.ts` — pre-spawned Gemini process pool (WarmProcessPool)
 - `src/session-store.ts` — SQLite-backed multi-turn session store (node:sqlite)
+- `src/setup.ts` — `--setup` wizard (binary discovery, auth check, MCP config output)
 - `src/tools/ask-gemini.ts`, `src/tools/gemini-reply.ts` — MCP tool handlers
 - `src/dispatcher.ts` — routes MCP tool calls + error handling
 
 ## Build & test
 - `npm run build` — tsc (must pass before commit)
-- `npm test` — vitest (263 tests; all must pass)
+- `npm test` — vitest (310 tests; all must pass)
 - SQLite emits `ExperimentalWarning` in test output — not an error, safe to ignore
+
+## Hands-on integration testing (REQUIRED before marking any PR ready)
+
+Unit tests cover isolated logic. **Real MCP tool calls against the local build are mandatory** before a PR leaves draft — they catch spawn failures, session wiring, warm pool behavior, and output parsing that mocks cannot.
+
+**Setup:** The project `.mcp.json` registers `gemini-dev` pointing at `dist/index.js`.
+Requires a Claude Code restart after changes to pick up the local build.
+Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed release).
+
+**Required scenarios — run all before marking PR ready:**
+1. `ask-gemini` basic prompt (`wait: true`) — verifies spawn, GEMINI_BINARY auto-discovery, response parsing
+2. `gemini-reply` continuing a session — verifies session store round-trip
+3. `ask-gemini` without `wait` + `gemini-poll` — verifies async job lifecycle
+4. `gemini-cancel` — start a job, cancel it, verify status becomes `cancelled`
+5. `@file` reference in prompt — verifies file expansion end-to-end (use a file in `src/`)
+6. Two concurrent `ask-gemini` calls — verifies semaphore and warm pool under load
+
+**After a PR adds new features**, add the relevant scenario(s) to the list above and to the PR test plan.
 
 ## Testing patterns
 - Module-level singletons (semaphore, MAX_RETRIES env constants) are frozen at import time.
@@ -34,3 +53,4 @@
 | `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only, for debugging) |
 | `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes |
 | `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms); prompt writes delayed until this age after spawn |
+| `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. When set, auto-discovery is skipped. Useful for nvm/fnm users where gemini isn't on the MCP server's PATH. |

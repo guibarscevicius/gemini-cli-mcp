@@ -114,8 +114,18 @@ const isEntrypoint =
   realpathSync(resolve(process.argv[1])) === fileURLToPath(import.meta.url);
 
 if (isEntrypoint) {
-  main().catch((err) => {
-    process.stderr.write(`Fatal: ${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(1);
-  });
+  if (process.argv.includes("--setup")) {
+    import("./setup.js")
+      .then(({ runSetup }) => runSetup())
+      .then(() => process.exit(0))
+      .catch((err) => {
+        process.stderr.write(`Setup error: ${err instanceof Error ? err.message : String(err)}\n`);
+        process.exit(1);
+      });
+  } else {
+    main().catch((err) => {
+      process.stderr.write(`Fatal: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    });
+  }
 }
