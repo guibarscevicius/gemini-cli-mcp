@@ -177,6 +177,7 @@ export interface GeminiOptions {
   cwd?: string;
   tool?: string;
   sessionId?: string;
+  expandRefs?: boolean;
 }
 
 /** Injectable executor type — override in tests to avoid spawning a real subprocess. */
@@ -474,6 +475,18 @@ const defaultExecutor: GeminiExecutor = (args, opts, onChunk) =>
 const GREEDY_AT_RE = /(?:^|(?<=\s))@([^\s@,;]+)/g;
 
 /**
+ * Characters that signal the token is NOT a file path — used to reject
+ * framework template syntax (@click.prevent="save"), shell pipes (@cmd|grep),
+ * angle-bracket patterns (@foo<div>), and similar false positives.  (#38)
+ *
+ * `=` / `"` / `'` → attribute bindings (Vue, Angular, Svelte)
+ * `<` / `>`       → HTML/JSX angle brackets
+ * `|`             → shell pipes
+ * `` ` ``         → template literals / inline code
+ */
+const NON_PATH_CHARS_RE = /[='"<>|`]/;
+
+/**
  * Strip unmatched trailing `)` / `]` and trailing punctuation from a
  * greedily-captured @file token.
  *
@@ -518,6 +531,19 @@ function extractFileRefs(text: string): string[] {
   GREEDY_AT_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = GREEDY_AT_RE.exec(text)) !== null) {
+    // Skip tokens containing characters that signal non-file-path context —
+    // catches Vue/Angular template syntax (@click.prevent="..."), shell pipes,
+    // string delimiters, and similar false positives.  (#38)
+    if (NON_PATH_CHARS_RE.test(match[1])) {
+      if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
+        process.stderr.write(JSON.stringify({
+          event: "file_ref_skipped",
+          token: match[1].slice(0, 80),
+          reason: "non_path_chars",
+        }) + "\n");
+      }
+      continue;
+    }
     const balanced = extractBalancedPath(match[1]);
     if (/[/.]/.test(balanced)) {
       paths.push(balanced);
@@ -631,6 +657,9 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
   // We use a replacement function with the same regex to ensure consistency.
   GREEDY_AT_RE.lastIndex = 0;
   const maskedPrompt = prompt.replace(GREEDY_AT_RE, (match, pathToken) => {
+    // Apply the same non-path filter as extractFileRefs — without this,
+    // framework tokens like @click.prevent="save" get their @ stripped.  (#38)
+    if (NON_PATH_CHARS_RE.test(pathToken)) return match;
     const balanced = extractBalancedPath(pathToken);
     if (/[/.]/.test(balanced)) {
       // Replace the matched token (including @) with just the balanced path.
@@ -674,7 +703,7 @@ export async function runGemini(
   }
 
   // Guard: multiple @file tokens need cwd to resolve paths
-  if (!opts.cwd && countFileRefs(prompt) >= 2) {
+  if (opts.expandRefs !== false && !opts.cwd && countFileRefs(prompt) >= 2) {
     throw new Error(
       "Multiple @file tokens require the cwd option — pass the project root directory."
     );
@@ -682,7 +711,7 @@ export async function runGemini(
 
   // Expand multiple @file references ourselves; single @file still goes through CLI
   let expandedPrompt = prompt;
-  if (opts.cwd) {
+  if (opts.cwd && opts.expandRefs !== false) {
     expandedPrompt = await expandFileRefs(prompt, opts.cwd);
   }
 
