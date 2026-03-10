@@ -85,6 +85,7 @@ Input:
   cwd           string   Optional. Working directory — required for any @file path.
   wait          boolean  Optional. Block until done and return response inline (default: false).
   waitTimeoutMs number   Optional. Max ms to wait when wait=true (default: 90000).
+  expandRefs    boolean  Optional. Set to false to disable @file expansion (e.g. Vue @click syntax). Default: true.
 
 Output (async — default):
   jobId          string   Poll with gemini-poll or cancel with gemini-cancel.
@@ -115,6 +116,7 @@ Input:
   cwd           string   Optional. Working directory for relative @file paths.
   wait          boolean  Optional. Block until done (default: false).
   waitTimeoutMs number   Optional. Max ms to wait when wait=true (default: 90000).
+  expandRefs    boolean  Optional. Set to false to disable @file expansion. Default: true.
 
 Output:
   jobId           string
