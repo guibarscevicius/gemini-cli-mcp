@@ -4,12 +4,13 @@
 - `src/gemini-runner.ts` — subprocess execution, warm pool integration, semaphore, retry, telemetry
 - `src/warm-pool.ts` — pre-spawned Gemini process pool (WarmProcessPool)
 - `src/session-store.ts` — SQLite-backed multi-turn session store (node:sqlite)
+- `src/setup.ts` — `--setup` wizard (binary discovery, auth check, MCP config output)
 - `src/tools/ask-gemini.ts`, `src/tools/gemini-reply.ts` — MCP tool handlers
 - `src/dispatcher.ts` — routes MCP tool calls + error handling
 
 ## Build & test
 - `npm run build` — tsc (must pass before commit)
-- `npm test` — vitest (263 tests; all must pass)
+- `npm test` — vitest (310 tests; all must pass)
 - SQLite emits `ExperimentalWarning` in test output — not an error, safe to ignore
 
 ## Testing patterns
@@ -34,3 +35,4 @@
 | `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only, for debugging) |
 | `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes |
 | `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms); prompt writes delayed until this age after spawn |
+| `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. When set, auto-discovery is skipped. Useful for nvm/fnm users where gemini isn't on the MCP server's PATH. |
