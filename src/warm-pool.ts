@@ -62,7 +62,8 @@ export class WarmProcessPool {
     private readonly poolSize: number,
     private readonly baseArgs: string[],
     private readonly env: Record<string, string>,
-    private readonly startupMs: number = 0
+    private readonly startupMs: number = 0,
+    private readonly binary: string = "gemini"
   ) {
     for (let i = 0; i < poolSize; i++) {
       this._spawnAndEnqueue();
@@ -73,7 +74,7 @@ export class WarmProcessPool {
   private _spawnAndEnqueue(): void {
     if (this.draining) return;
 
-    const cp = spawn("gemini", this.baseArgs, {
+    const cp = spawn(this.binary, this.baseArgs, {
       env: this.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -106,7 +107,7 @@ export class WarmProcessPool {
             this.consecutiveSpawnFailures++;
             if (this.consecutiveSpawnFailures >= WarmProcessPool.MAX_CONSECUTIVE_FAILURES) {
               process.stderr.write(
-                `[gemini-cli-mcp] warm pool: gemini binary not found — ` +
+                `[gemini-cli-mcp] warm pool: gemini binary not found at '${this.binary}' — ` +
                 `pool disabled after ${WarmProcessPool.MAX_CONSECUTIVE_FAILURES} consecutive failures\n`
               );
               // Reject any waiters that would otherwise hang indefinitely, then

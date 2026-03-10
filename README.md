@@ -6,6 +6,18 @@
 
 An MCP server that wraps the official [`@google/gemini-cli`](https://github.com/google-gemini/gemini-cli), exposing Gemini to Claude Code and any MCP-compatible host. Supports stateful multi-turn sessions, async jobs, response streaming, and a warm process pool for low-latency responses.
 
+## Quick Setup (recommended)
+
+```bash
+npm install -g @guibarscevicius/gemini-cli-mcp
+gemini-cli-mcp --setup
+```
+
+The wizard will:
+1. Find or install `@google/gemini-cli`
+2. Verify your Gemini authentication
+3. Print a ready-to-paste MCP config with absolute paths
+
 ## Security
 
 | Property | Implementation |
@@ -257,6 +269,7 @@ All variables are optional.
 | `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only). |
 | `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes. |
 | `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms). Prompt writes are delayed by this amount after spawn. |
+| `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. Overrides auto-discovery. Useful when gemini is installed via nvm/fnm and not on the PATH that MCP servers see. |
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained (ms). |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |
 
@@ -273,6 +286,25 @@ All variables are optional.
 **Sessions expire** — Sessions auto-expire after 60 minutes of inactivity. Start a new session with `ask-gemini`.
 
 **Warm pool not starting** — Check stderr for `gemini binary not found`. After 5 consecutive spawn failures the pool disables itself and logs a diagnostic message.
+
+### gemini binary not found (nvm/fnm users)
+
+If you use nvm or fnm, the `gemini` binary may not be on the PATH that Claude Code sees (MCP servers start in non-interactive shells where version managers don't load).
+
+**Option A (recommended):** Run `gemini-cli-mcp --setup` — it auto-discovers the binary and generates a config with `GEMINI_BINARY` set.
+
+**Option B (manual):** Set `GEMINI_BINARY` in your MCP config env:
+```json
+{
+  "gemini": {
+    "command": "...",
+    "args": ["..."],
+    "env": {
+      "GEMINI_BINARY": "/home/you/.nvm/versions/node/v24.0.0/bin/gemini"
+    }
+  }
+}
+```
 
 ## How sessions work
 

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readdirSync } from "node:fs";
 import { readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as nodePath from "node:path";
@@ -94,9 +95,64 @@ const POOL_ENABLED = (process.env.GEMINI_POOL_ENABLED ?? "1") !== "0";
 const POOL_SIZE = parseInt(process.env.GEMINI_POOL_SIZE ?? String(MAX_CONCURRENT), 10);
 const POOL_STARTUP_MS = parseInt(process.env.GEMINI_POOL_STARTUP_MS ?? "12000", 10);
 
+function readdirSafe(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+export function discoverGeminiBinary(): string {
+  const explicit = process.env.GEMINI_BINARY;
+  if (explicit) return explicit;
+
+  const home = os.homedir();
+  const candidates: string[] = [];
+
+  // nvm — sort descending so latest version wins
+  const nvmVersions = readdirSafe(nodePath.join(home, ".nvm/versions/node")).sort().reverse();
+  for (const v of nvmVersions) {
+    candidates.push(nodePath.join(home, `.nvm/versions/node/${v}/bin/gemini`));
+  }
+
+  // fnm
+  const fnmVersions = readdirSafe(nodePath.join(home, ".fnm/node-versions")).sort().reverse();
+  for (const v of fnmVersions) {
+    candidates.push(nodePath.join(home, `.fnm/node-versions/${v}/installation/bin/gemini`));
+  }
+
+  // volta
+  candidates.push(nodePath.join(home, ".volta/bin/gemini"));
+
+  // asdf
+  const asdfVersions = readdirSafe(nodePath.join(home, ".asdf/installs/nodejs")).sort().reverse();
+  for (const v of asdfVersions) {
+    candidates.push(nodePath.join(home, `.asdf/installs/nodejs/${v}/bin/gemini`));
+  }
+
+  // Homebrew (Apple Silicon + Intel)
+  candidates.push("/opt/homebrew/bin/gemini", "/usr/local/bin/gemini");
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      process.stderr.write(`[gemini-cli-mcp] auto-discovered gemini at: ${candidate}\n`);
+      return candidate;
+    }
+  }
+
+  return "gemini"; // fallback to PATH; ENOENT gives a clear error
+}
+
+const GEMINI_BINARY: string = discoverGeminiBinary();
+
 export let warmPool: WarmProcessPool | null = null;
 
-if (POOL_ENABLED) {
+// Suppress pool init during --setup: the pool would try to spawn gemini immediately,
+// producing ENOENT noise if gemini isn't installed yet (exactly the case --setup handles).
+const SETUP_MODE = process.argv.includes("--setup");
+
+if (POOL_ENABLED && !SETUP_MODE) {
   warmPool = new WarmProcessPool(
     Number.isFinite(POOL_SIZE) && POOL_SIZE >= 1 ? POOL_SIZE : MAX_CONCURRENT,
     ["--yolo", "--output-format", "stream-json"],
@@ -104,7 +160,8 @@ if (POOL_ENABLED) {
       HOME: process.env.HOME ?? "",
       PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     },
-    POOL_STARTUP_MS
+    POOL_STARTUP_MS,
+    GEMINI_BINARY
   );
 }
 
@@ -325,7 +382,7 @@ export function spawnGemini(
   onDone: (fullText: string) => void,
   onError: (err: Error) => void
 ): ChildProcess {
-  const cp = spawn("gemini", args, {
+  const cp = spawn(GEMINI_BINARY, args, {
     env: spawnOpts.env,
     cwd: spawnOpts.cwd,
     stdio: ["pipe", "pipe", "pipe"],
@@ -412,7 +469,7 @@ export function spawnGemini(
     if ((err as { code?: string }).code === "ENOENT") {
       settle(() =>
         onError(
-          new Error("gemini binary not found. Is the Gemini CLI installed and on PATH?", {
+          new Error(`gemini binary not found at '${GEMINI_BINARY}'. Run: gemini-cli-mcp --setup`, {
             cause: err,
           })
         )
