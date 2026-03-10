@@ -1,5 +1,7 @@
-name: Publish to npm
+name: Publish to npm (manual)
 
+# Fallback for manual releases or re-publishing a failed release.
+# Normal flow: release-please.yml handles publish automatically.
 on:
   release:
     types: [published]
@@ -43,5 +45,3 @@ jobs:
       - name: Publish
         run: npm publish --access public
         # No NODE_AUTH_TOKEN needed — uses OIDC trusted publishing.
-        # Configure the trusted publisher at:
-        #   npmjs.com/package/@guibarscevicius/gemini-cli-mcp → Settings → Publishing Access
