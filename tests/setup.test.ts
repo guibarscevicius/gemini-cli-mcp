@@ -119,6 +119,92 @@ describe("runSetup", () => {
 
     const output = writeSpy.mock.calls.map((c) => c[0]).join("");
     expect(output).toContain("Not authenticated");
+    expect(output).not.toContain("GEMINI_BINARY");
+    expect(output).not.toContain("Setup complete");
+    writeSpy.mockRestore();
+  });
+
+  it("shows failure message and suppresses config when install fails", async () => {
+    vi.doMock("../src/gemini-runner.js", () => ({
+      discoverGeminiBinary: vi.fn().mockReturnValue("gemini"),
+    }));
+    vi.doMock("node:fs", async (importOriginal: () => Promise<typeof import("node:fs")>) => {
+      const actual = await importOriginal();
+      return { ...actual, existsSync: vi.fn().mockReturnValue(false) };
+    });
+    vi.doMock("node:child_process", async (importOriginal: () => Promise<typeof import("node:child_process")>) => {
+      const actual = await importOriginal();
+      const mockSpawn = vi.fn().mockImplementation((_cmd: string, args: string[]) => {
+        const cp = mockChildProcess();
+        const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+        (cp.on as ReturnType<typeof vi.fn>).mockImplementation((evt: string, cb: (...a: unknown[]) => void) => {
+          handlers[evt] = handlers[evt] ?? [];
+          handlers[evt].push(cb);
+        });
+        if (args.includes("gemini") && _cmd === "which") {
+          setTimeout(() => handlers["close"]?.forEach((cb) => cb(1, null)), 5);
+        } else if (args.includes("install")) {
+          setTimeout(() => handlers["close"]?.forEach((cb) => cb(1, null)), 5);
+        }
+        return cp;
+      });
+      return { ...actual, spawn: mockSpawn };
+    });
+
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup();
+
+    const output = writeSpy.mock.calls.map((c) => c[0]).join("");
+    expect(output).toContain("Installation failed");
+    expect(output).not.toContain("GEMINI_BINARY");
+    expect(output).not.toContain("Setup complete");
+    writeSpy.mockRestore();
+  });
+
+  it("uses gemini path from which when auto-discovery falls back", async () => {
+    vi.doMock("../src/gemini-runner.js", () => ({
+      discoverGeminiBinary: vi.fn().mockReturnValue("gemini"),
+    }));
+    vi.doMock("node:fs", async (importOriginal: () => Promise<typeof import("node:fs")>) => {
+      const actual = await importOriginal();
+      return { ...actual, existsSync: vi.fn().mockReturnValue(false) };
+    });
+    vi.doMock("node:child_process", async (importOriginal: () => Promise<typeof import("node:child_process")>) => {
+      const actual = await importOriginal();
+      const mockSpawn = vi.fn().mockImplementation((_cmd: string, _args: string[]) => {
+        const cp = mockChildProcess();
+        const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+        const stdoutHandlers: Record<string, ((d: Buffer) => void)[]> = {};
+        (cp.on as ReturnType<typeof vi.fn>).mockImplementation((evt: string, cb: (...a: unknown[]) => void) => {
+          handlers[evt] = handlers[evt] ?? [];
+          handlers[evt].push(cb);
+        });
+        (cp.stdout!.on as ReturnType<typeof vi.fn>).mockImplementation((evt: string, cb: (d: Buffer) => void) => {
+          stdoutHandlers[evt] = stdoutHandlers[evt] ?? [];
+          stdoutHandlers[evt].push(cb);
+        });
+        if (_cmd === "which") {
+          setTimeout(() => {
+            stdoutHandlers["data"]?.forEach((cb) => cb(Buffer.from("/usr/bin/gemini\n")));
+            handlers["close"]?.forEach((cb) => cb(0, null));
+          }, 5);
+        } else {
+          setTimeout(() => handlers["close"]?.forEach((cb) => cb(0, null)), 5);
+        }
+        return cp;
+      });
+      return { ...actual, spawn: mockSpawn };
+    });
+
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup();
+
+    const output = writeSpy.mock.calls.map((c) => c[0]).join("");
+    expect(output).toContain("Found gemini on PATH: /usr/bin/gemini");
+    expect(output).toContain("/usr/bin/gemini");
+    expect(output).toContain("Setup complete");
     writeSpy.mockRestore();
   });
 

@@ -130,3 +130,24 @@ describe("GEMINI_BINARY constant in spawn calls", () => {
     );
   });
 });
+
+describe("SETUP_MODE suppresses warm pool", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    const idx = process.argv.indexOf("--setup");
+    if (idx !== -1) process.argv.splice(idx, 1);
+  });
+
+  it("does not initialize warmPool when --setup is in argv", async () => {
+    process.argv.push("--setup");
+    process.env.GEMINI_POOL_ENABLED = "1";
+    try {
+      vi.resetModules();
+      const mod = await import("../src/gemini-runner.js");
+      expect(mod.warmPool).toBeNull();
+    } finally {
+      delete process.env.GEMINI_POOL_ENABLED;
+    }
+  });
+});

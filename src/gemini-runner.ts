@@ -141,7 +141,7 @@ export function discoverGeminiBinary(): string {
     }
   }
 
-  return "gemini"; // fallback to PATH; ENOENT gives a clear error
+  return "gemini"; // fallback to PATH; cold-spawn gives a clear ENOENT; warm pool detects after 5 failures
 }
 
 const GEMINI_BINARY: string = discoverGeminiBinary();

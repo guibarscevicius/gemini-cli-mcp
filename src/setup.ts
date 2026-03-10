@@ -22,11 +22,18 @@ async function installGeminiCli(): Promise<void> {
       stdio: "inherit",
       env: process.env,
     });
+    let settled = false;
     cp.on("close", (code) => {
+      if (settled) return;
+      settled = true;
       if (code === 0) resolve();
       else reject(new Error(`npm install exited with code ${code}`));
     });
-    cp.on("error", reject);
+    cp.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
   });
 }
 
@@ -47,6 +54,17 @@ async function checkAuth(binary: string): Promise<"ok" | "not-authenticated" | "
     }, 15_000);
     cp.stderr?.on("data", (d: Buffer) => {
       stderr += d.toString();
+    });
+    cp.stdout?.on("data", () => {});
+    cp.on("error", (err) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        resolve("not-authenticated");
+      } else {
+        resolve("ok");
+      }
     });
     cp.on("close", (code) => {
       if (resolved) return;
@@ -97,7 +115,7 @@ export async function runSetup(): Promise<void> {
       binaryFound = true;
       print(`  ${GREEN}✓${RESET} Found gemini on PATH: ${binary}`);
     }
-  } else if (binary !== "gemini") {
+  } else {
     print(`  ${GREEN}✓${RESET} Found gemini: ${binary}`);
   }
 
@@ -121,7 +139,12 @@ export async function runSetup(): Promise<void> {
           if (existsSync(candidate)) binary = candidate;
         }
       }
-      print(`  ${GREEN}✓${RESET} Installed gemini: ${binary}`);
+      if (binary === "gemini") {
+        print(`  ${YELLOW}⚠${RESET}  Installed, but could not locate binary path. Using "gemini" from PATH.`);
+        print(`  If the server fails to start, set GEMINI_BINARY to the full path of the gemini binary.`);
+      } else {
+        print(`  ${GREEN}✓${RESET} Installed gemini: ${binary}`);
+      }
       binaryFound = true;
     } catch (err) {
       print(`  ${RED}✗${RESET}  Installation failed: ${err instanceof Error ? err.message : String(err)}`);
