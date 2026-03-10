@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.2.3...gemini-cli-mcp-v0.3.0) (2026-03-10)
+
+
+### Features
+
+* async jobs + streaming via spawn/stream-json ([#12](https://github.com/guibarscevicius/gemini-cli-mcp/issues/12), [#17](https://github.com/guibarscevicius/gemini-cli-mcp/issues/17)) ([#22](https://github.com/guibarscevicius/gemini-cli-mcp/issues/22)) ([04abe40](https://github.com/guibarscevicius/gemini-cli-mcp/commit/04abe40455bed8d2942995cec0d84bd39559ff23))
+* ergonomics — notifications/cancelled, structuredContent, wait mode, pollIntervalMs ([a893769](https://github.com/guibarscevicius/gemini-cli-mcp/commit/a8937693c179f242ad0d75fc15c0f644cdc9ad19))
+* ergonomics — notifications/cancelled, structuredContent, wait mode, pollIntervalMs ([894cb76](https://github.com/guibarscevicius/gemini-cli-mcp/commit/894cb763d61d30a65dedc6461e5a8156913ef013))
+* initial implementation of gemini-cli-mcp ([387f6e1](https://github.com/guibarscevicius/gemini-cli-mcp/commit/387f6e1e7a1d5e7af42b4d70604df4f28e4e868c))
+* LRU request dedup cache for stateless ask-gemini calls ([#21](https://github.com/guibarscevicius/gemini-cli-mcp/issues/21)) ([0f4706c](https://github.com/guibarscevicius/gemini-cli-mcp/commit/0f4706ca9469d68cb931e3656c54bce931e63060)), closes [#18](https://github.com/guibarscevicius/gemini-cli-mcp/issues/18)
+* MCP progress notifications ([#26](https://github.com/guibarscevicius/gemini-cli-mcp/issues/26)) ([#30](https://github.com/guibarscevicius/gemini-cli-mcp/issues/30)) ([0705093](https://github.com/guibarscevicius/gemini-cli-mcp/commit/0705093ad8a0683c8344f0a2f914589ebea8d57a))
+* raise limits and add large-prompt temp-file bypass ([#11](https://github.com/guibarscevicius/gemini-cli-mcp/issues/11)) ([93174e5](https://github.com/guibarscevicius/gemini-cli-mcp/commit/93174e56fa78f1901201f3d501d523857989c9c4))
+* reliability + observability (semaphore, retry, SQLite sessions, telemetry) ([#20](https://github.com/guibarscevicius/gemini-cli-mcp/issues/20)) ([6feb2b6](https://github.com/guibarscevicius/gemini-cli-mcp/commit/6feb2b62bf76009328f7bb6c8358a7f443088596))
+* WarmProcessPool — pre-spawn Gemini processes to cut cold-start latency ([#31](https://github.com/guibarscevicius/gemini-cli-mcp/issues/31)) ([69263ba](https://github.com/guibarscevicius/gemini-cli-mcp/commit/69263ba330bb785e7fa493533a6f4ff675e914c7))
+
+
+### Bug Fixes
+
+* address 13 PR review findings ([8dbe1bc](https://github.com/guibarscevicius/gemini-cli-mcp/commit/8dbe1bc3e7f213909edd1bf63807af74210b945f))
+* address 20 findings from full codebase review ([5c54099](https://github.com/guibarscevicius/gemini-cli-mcp/commit/5c54099f97a1d36134aa38f6eec8edbcd0400bfe))
+* address 20 findings from full codebase review ([80b4d21](https://github.com/guibarscevicius/gemini-cli-mcp/commit/80b4d212a4f5790553a8eeb8292ecb880ec2b49e))
+* address PR [#29](https://github.com/guibarscevicius/gemini-cli-mcp/issues/29) review findings (19 items) ([3c6fd68](https://github.com/guibarscevicius/gemini-cli-mcp/commit/3c6fd689b60e477391d7b1673df0bc90a6cced96))
+* address PR review findings — symlink escape, error handling, test hygiene ([f87e8b2](https://github.com/guibarscevicius/gemini-cli-mcp/commit/f87e8b27924b2be01cc41a6f618e6b2f5243b67d))
+* close gemini CLI stdin to unblock non-TTY execution ([16f5cf9](https://github.com/guibarscevicius/gemini-cli-mcp/commit/16f5cf97b0c8595a77e2e766b00ed4268dac80d3))
+* delay warm pool prompt write until CLI startup completes ([#32](https://github.com/guibarscevicius/gemini-cli-mcp/issues/32)) ([2a9b2a8](https://github.com/guibarscevicius/gemini-cli-mcp/commit/2a9b2a826df5431e6638470968d8718f4ac0e796))
+* enrich 'Path not in workspace' errors with actionable cwd hint ([779f0b1](https://github.com/guibarscevicius/gemini-cli-mcp/commit/779f0b1022e9da398a05750aca0f446f75f42aea))
+* enrich 'Path not in workspace' errors with actionable cwd hint ([e27bdf6](https://github.com/guibarscevicius/gemini-cli-mcp/commit/e27bdf635dc4d853996ea9a1a0528485faec7694)), closes [#4](https://github.com/guibarscevicius/gemini-cli-mcp/issues/4)
+* expand multiple [@file](https://github.com/file) tokens in MCP layer (issue [#5](https://github.com/guibarscevicius/gemini-cli-mcp/issues/5)) ([22c4b38](https://github.com/guibarscevicius/gemini-cli-mcp/commit/22c4b38ada2745d20ca99a2f78e30e106ec04825))
+* expand multiple [@file](https://github.com/file) tokens in MCP layer to fix multi-file support ([b89dc6d](https://github.com/guibarscevicius/gemini-cli-mcp/commit/b89dc6dde2bacb6ee85e7fd501bca5f92b45b02e))
+* filter non-file-path @ tokens to prevent false positives ([#39](https://github.com/guibarscevicius/gemini-cli-mcp/issues/39)) ([707bd86](https://github.com/guibarscevicius/gemini-cli-mcp/commit/707bd863a00fed815e81d4a278a31f8a284090f2))
+* replace NodeJS.ErrnoException with inline type to satisfy ESLint no-undef ([965e3ee](https://github.com/guibarscevicius/gemini-cli-mcp/commit/965e3ee39514b3b2be26710eb286a1aa084d2144))
+* replace NodeJS.ProcessEnv with Record&lt;string, string&gt; to satisfy eslint no-undef on CI ([d9d9ef0](https://github.com/guibarscevicius/gemini-cli-mcp/commit/d9d9ef04c389bad7d0bdcadd3c3005048d4b10bc))
+* resolve symlink in isEntrypoint check so npx invocation works ([#36](https://github.com/guibarscevicius/gemini-cli-mcp/issues/36)) ([0e511da](https://github.com/guibarscevicius/gemini-cli-mcp/commit/0e511dab592cdafb2ef874c25fced65117b529da))
+* second review pass — cause chains, regex simplification, missing tests ([f601323](https://github.com/guibarscevicius/gemini-cli-mcp/commit/f601323ba9fa1522b1dd014028478917d8cc1fbe))
+* ship dist/index.js with executable permissions in tarball ([#37](https://github.com/guibarscevicius/gemini-cli-mcp/issues/37)) ([7c812cf](https://github.com/guibarscevicius/gemini-cli-mcp/commit/7c812cf626eab1324f18a29a54fd565fcf46e3d3))
+* support () and [] in [@file](https://github.com/file) paths for framework route patterns ([0648f31](https://github.com/guibarscevicius/gemini-cli-mcp/commit/0648f3172377efd7d8ea2030427484a93f57943d))
+* support () and [] in [@file](https://github.com/file) paths for framework route patterns ([f80bded](https://github.com/guibarscevicius/gemini-cli-mcp/commit/f80bdede4d93b7e54f0f4373df8928cc5e9573cf)), closes [#9](https://github.com/guibarscevicius/gemini-cli-mcp/issues/9)
+* tighten job-store guards, GC pending jobs, fix wait-mode timer and unregisterRequest leak ([f6b01e9](https://github.com/guibarscevicius/gemini-cli-mcp/commit/f6b01e904478cc32eb2ee14d95d592924df7a9da))
+
 ## [0.2.3] — 2026-03-09
 
 ### Fixed
