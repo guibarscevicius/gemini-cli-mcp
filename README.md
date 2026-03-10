@@ -269,13 +269,13 @@ All variables are optional.
 | `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only). |
 | `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes. |
 | `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms). Prompt writes are delayed by this amount after spawn. |
-| `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. Overrides auto-discovery. Useful when gemini is installed via nvm/fnm and not on the PATH that MCP servers see. |
+| `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. When set, auto-discovery is skipped entirely. Useful when gemini is installed via nvm/fnm and not on the PATH that MCP servers see. |
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained (ms). |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |
 
 ## Troubleshooting
 
-**`gemini binary not found`** — Install the Gemini CLI: `npm install -g @google/gemini-cli`
+**`gemini binary not found at '...'`** — Run `gemini-cli-mcp --setup` to auto-detect the binary and verify auth. Or install the Gemini CLI manually: `npm install -g @google/gemini-cli`
 
 **`HOME environment variable is not set`** — The Gemini CLI needs `HOME` to locate OAuth credentials (`~/.config/gemini`).
 
