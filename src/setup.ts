@@ -60,7 +60,7 @@ async function checkAuth(binary: string): Promise<"ok" | "not-authenticated" | "
       if (resolved) return;
       resolved = true;
       clearTimeout(timer);
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if ((err as { code?: string }).code === "ENOENT") {
         resolve("not-authenticated");
       } else {
         resolve("ok");
