@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.3.0...gemini-cli-mcp-v0.4.0) (2026-03-10)
+
+
+### Features
+
+* plug-and-play distribution — GEMINI_BINARY auto-discovery + --setup wizard ([#61](https://github.com/guibarscevicius/gemini-cli-mcp/issues/61)) ([711963c](https://github.com/guibarscevicius/gemini-cli-mcp/commit/711963c007ba1bbc16d981b90c2eacb9155bddf1))
+
 ## [0.3.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.2.3...gemini-cli-mcp-v0.3.0) (2026-03-10)
 
 
