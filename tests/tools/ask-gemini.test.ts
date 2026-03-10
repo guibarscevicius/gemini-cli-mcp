@@ -183,6 +183,24 @@ describe("askGemini", () => {
     );
   });
 
+  it("passes expandRefs: false to runGemini when provided", async () => {
+    await askGemini({ prompt: "Check @click.prevent in @a.ts", expandRefs: false });
+    await flush();
+    expect(mockRunGemini).toHaveBeenCalledWith(
+      "Check @click.prevent in @a.ts",
+      expect.objectContaining({ expandRefs: false }),
+      expect.any(Function),
+      expect.any(Function)
+    );
+  });
+
+  it("expandRefs defaults to undefined when not provided", async () => {
+    await askGemini({ prompt: "hello" });
+    await flush();
+    const opts = mockRunGemini.mock.calls[0][1];
+    expect(opts.expandRefs).toBeUndefined();
+  });
+
   // ── Input validation (Zod) ──────────────────────────────────────────────────
 
   it("throws ZodError when prompt is missing", async () => {

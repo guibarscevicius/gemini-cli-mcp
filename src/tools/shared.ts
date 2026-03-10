@@ -9,7 +9,7 @@ import type { ToolCallContext } from "../dispatcher.js";
 export async function runGeminiAsync(
   jobId: string,
   prompt: string,
-  opts: { model?: string; cwd?: string; tool: string; sessionId?: string },
+  opts: { model?: string; cwd?: string; tool: string; sessionId?: string; expandRefs?: boolean },
   ctx: ToolCallContext
 ): Promise<string> {
   const job = jobStore.getJob(jobId);

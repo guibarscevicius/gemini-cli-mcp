@@ -31,6 +31,10 @@ export const AskGeminiSchema = z.object({
     .positive()
     .optional()
     .describe("Timeout for wait mode in ms (default 90000). Falls back to async on timeout."),
+  expandRefs: z
+    .boolean()
+    .optional()
+    .describe("Set to false to disable @file reference expansion. Useful when prompts contain framework @ syntax (e.g. Vue @click)."),
 });
 
 export type AskGeminiInput = z.infer<typeof AskGeminiSchema>;
@@ -51,7 +55,7 @@ export interface AskGeminiOutput {
  * Returns immediately with { jobId, sessionId } otherwise.
  */
 export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Promise<AskGeminiOutput> {
-  const { prompt, model, cwd, wait, waitTimeoutMs } = AskGeminiSchema.parse(input);
+  const { prompt, model, cwd, wait, waitTimeoutMs, expandRefs } = AskGeminiSchema.parse(input);
 
   const sessionId = randomUUID();
   const jobId = randomUUID();
@@ -65,7 +69,7 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
 
   // Background job — fire-and-forget in async mode, raced via job.completion in wait/streaming mode.
   // This .then/.catch chain always owns request-map cleanup.
-  runGeminiAsync(jobId, prompt, { model, cwd, tool: "ask-gemini" }, ctx)
+  runGeminiAsync(jobId, prompt, { model, cwd, tool: "ask-gemini", expandRefs }, ctx)
     .then((response) => {
       jobStore.completeJob(jobId, response);
       try {
@@ -146,6 +150,11 @@ export const askGeminiToolDefinition = {
         type: "number",
         description:
           "Timeout for wait mode in ms (default 90000). Falls back to async on timeout.",
+      },
+      expandRefs: {
+        type: "boolean",
+        description:
+          "Set to false to disable @file reference expansion. Useful when prompts contain framework @ syntax (e.g. Vue @click).",
       },
     },
     required: ["prompt"],

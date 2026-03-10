@@ -32,6 +32,10 @@ export const GeminiReplySchema = z.object({
     .positive()
     .optional()
     .describe("Timeout for wait mode in ms (default 90000). Falls back to async on timeout."),
+  expandRefs: z
+    .boolean()
+    .optional()
+    .describe("Set to false to disable @file reference expansion. Useful when prompts contain framework @ syntax (e.g. Vue @click)."),
 });
 
 export type GeminiReplyInput = z.infer<typeof GeminiReplySchema>;
@@ -52,7 +56,7 @@ export interface GeminiReplyOutput {
  * Throws McpError(InvalidParams) when the session is unknown, expired, or has a pending job.
  */
 export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Promise<GeminiReplyOutput> {
-  const { sessionId, prompt, model, cwd, wait, waitTimeoutMs } = GeminiReplySchema.parse(input);
+  const { sessionId, prompt, model, cwd, wait, waitTimeoutMs, expandRefs } = GeminiReplySchema.parse(input);
 
   const sessionExists = sessionStore.get(sessionId);
   if (!sessionExists) {
@@ -82,7 +86,7 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
   const fullPrompt = history ? `${history}\n\n${prompt}` : prompt;
 
   // Fire-and-forget: background job
-  runGeminiAsync(jobId, fullPrompt, { model, cwd, tool: "gemini-reply", sessionId }, ctx)
+  runGeminiAsync(jobId, fullPrompt, { model, cwd, tool: "gemini-reply", sessionId, expandRefs }, ctx)
     .then((response) => {
       jobStore.completeJob(jobId, response);
       try {
@@ -163,6 +167,11 @@ export const geminiReplyToolDefinition = {
         type: "number",
         description:
           "Timeout for wait mode in ms (default 90000). Falls back to async on timeout.",
+      },
+      expandRefs: {
+        type: "boolean",
+        description:
+          "Set to false to disable @file reference expansion. Useful when prompts contain framework @ syntax (e.g. Vue @click).",
       },
     },
     required: ["sessionId", "prompt"],

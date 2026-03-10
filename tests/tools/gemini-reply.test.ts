@@ -239,6 +239,24 @@ describe("geminiReply", () => {
     );
   });
 
+  it("passes expandRefs: false to runGemini when provided", async () => {
+    await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "Check @click in @a.ts", expandRefs: false });
+    await flush();
+    expect(mockRunGemini).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ expandRefs: false }),
+      expect.any(Function),
+      expect.any(Function)
+    );
+  });
+
+  it("expandRefs defaults to undefined when not provided", async () => {
+    await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" });
+    await flush();
+    const opts = mockRunGemini.mock.calls[0][1];
+    expect(opts.expandRefs).toBeUndefined();
+  });
+
   // ── Input validation (Zod) ───────────────────────────────────────────────────
 
   it("throws ZodError for missing sessionId", async () => {

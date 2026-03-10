@@ -7,6 +7,7 @@ dist/
 *.pem
 *.key
 npm-debug.log*
+*.tgz
 .DS_Store
 
 # Claude Code project-local state (settings, subagent memory — not team-shared)
