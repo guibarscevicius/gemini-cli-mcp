@@ -76,8 +76,11 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
         sessionStore.appendTurn(sessionId, "user", prompt);
         sessionStore.appendTurn(sessionId, "assistant", response);
         sessionStore.clearPendingJob(sessionId);
-      } catch {
-        // session may have been GC'd — non-fatal
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `[gemini-cli-mcp] session ${sessionId} history update failed (non-fatal): ${msg}\n`
+        );
       }
       if (ctx.requestId !== undefined) {
         unregisterRequest(ctx.requestId);

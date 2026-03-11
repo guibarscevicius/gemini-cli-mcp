@@ -81,9 +81,9 @@ export class WarmProcessPool {
 
     const wp: WarmProcess = { cp, pid: cp.pid, readyAt: Date.now() + this.startupMs };
 
-    // listen for first stderr output as a readiness signal — the CLI writes
+    // listen for first stderr output as a readiness heuristic — the CLI writes
     // to stderr during startup (version info, auth checks, etc.). When we see
-    // any output the process is confirmed alive and past initialization.
+    // any output the process is likely past initialization (not guaranteed).
     const onStderrReady = () => {
       wp.readyAt = Date.now();
     };

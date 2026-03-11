@@ -98,7 +98,12 @@ const POOL_STARTUP_MS = parseInt(process.env.GEMINI_POOL_STARTUP_MS ?? "12000", 
 function readdirSafe(dir: string): string[] {
   try {
     return readdirSync(dir);
-  } catch {
+  } catch (err) {
+    if ((err as { code?: string }).code !== "ENOENT") {
+      process.stderr.write(
+        `[gemini-cli-mcp] warning: cannot read ${dir}: ${(err as Error).message}\n`
+      );
+    }
     return [];
   }
 }
@@ -239,6 +244,34 @@ async function withRetry<T>(
   throw new Error("unreachable");
 }
 
+// shared NDJSON event shape used by both runWithWarmProcess and spawnGemini
+type StreamEvent = {
+  type?: string;
+  role?: string;
+  content?: string;
+  delta?: boolean;
+  status?: string;
+  error?: unknown;
+  message?: unknown;
+};
+
+// extract structured error detail from a result:error or type:error event,
+// handling string, object, and missing error/message fields
+function extractErrorDetail(
+  e: { error?: unknown; message?: unknown },
+  rawEvent: unknown
+): string {
+  if (typeof e.error === "string") return e.error;
+  if (typeof e.message === "string") return e.message;
+  if (e.error != null) return JSON.stringify(e.error);
+  if (e.message != null) return JSON.stringify(e.message);
+
+  process.stderr.write(
+    `[gemini-cli-mcp] unrecognized error event: ${JSON.stringify(rawEvent)}\n`
+  );
+  return "gemini error (unknown)";
+}
+
 export interface GeminiOptions {
   model?: string;
   cwd?: string;
@@ -256,7 +289,7 @@ export type GeminiExecutor = (
 
 /**
  * Drive a pre-spawned warm process: write prompt to stdin, close it, then
- * parse the NDJSON that flushes from stdout when the process exits.
+ * parse NDJSON events from stdout incrementally as they arrive.
  *
  * The warm process may have accumulated leading newlines from the keepalive
  * timer; they appear in the user message content but do not affect response
@@ -300,17 +333,14 @@ export function runWithWarmProcess(
         try {
           event = JSON.parse(trimmed);
         } catch {
-          continue; // non-JSON line — skip
+          if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
+            process.stderr.write(
+              `[gemini-cli-mcp] skipped non-JSON line: ${trimmed.slice(0, 120)}\n`
+            );
+          }
+          continue;
         }
 
-        type StreamEvent = {
-          type?: string;
-          role?: string;
-          content?: string;
-          status?: string;
-          error?: unknown;
-          message?: string;
-        };
         const e = event as StreamEvent;
 
         if (e.type === "message" && e.role === "assistant" && typeof e.content === "string") {
@@ -320,25 +350,11 @@ export function runWithWarmProcess(
           if (e.status === "success") {
             settle(() => resolve(accumulated));
           } else {
-            const errDetail =
-              typeof e.error === "string"
-                ? e.error
-                : typeof e.message === "string"
-                  ? e.message
-                  : e.error != null
-                    ? JSON.stringify(e.error)
-                    : e.message != null
-                      ? JSON.stringify(e.message)
-                      : "gemini result error (unknown)";
-            if (errDetail.includes("(unknown)")) {
-              process.stderr.write(
-                `[gemini-cli-mcp] unrecognized error event: ${JSON.stringify(event)}\n`
-              );
-            }
+            const errDetail = extractErrorDetail(e, event);
             settle(() => reject(new GeminiOutputError(errDetail, errDetail)));
           }
         } else if (e.type === "error") {
-          const errDetail = typeof e.message === "string" ? e.message : "gemini error event";
+          const errDetail = extractErrorDetail(e, event);
           settle(() => reject(new GeminiOutputError(errDetail, errDetail)));
         }
       }
@@ -442,19 +458,14 @@ export function spawnGemini(
       try {
         event = JSON.parse(trimmed);
       } catch {
-        // Non-JSON line (debug output etc.) — skip
+        if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
+          process.stderr.write(
+            `[gemini-cli-mcp] skipped non-JSON line: ${trimmed.slice(0, 120)}\n`
+          );
+        }
         continue;
       }
 
-      type StreamEvent = {
-        type?: string;
-        role?: string;
-        content?: string;
-        delta?: boolean;
-        status?: string;
-        error?: unknown;
-        message?: string;
-      };
       const e = event as StreamEvent;
 
       if (e.type === "message" && e.role === "assistant" && typeof e.content === "string") {
@@ -464,33 +475,21 @@ export function spawnGemini(
         if (e.status === "success") {
           settle(() => onDone(accumulated));
         } else {
-          // status === "error"
-          const errDetail =
-            typeof e.error === "string"
-              ? e.error
-              : typeof e.message === "string"
-                ? e.message
-                : e.error != null
-                  ? JSON.stringify(e.error)
-                  : e.message != null
-                    ? JSON.stringify(e.message)
-                    : "gemini result error (unknown)";
-          if (errDetail.includes("(unknown)")) {
-            process.stderr.write(
-              `[gemini-cli-mcp] unrecognized error event: ${JSON.stringify(event)}\n`
-            );
-          }
+          const errDetail = extractErrorDetail(e, event);
           settle(() => onError(new GeminiOutputError(errDetail, errDetail)));
         }
       } else if (e.type === "error") {
-        const errDetail = typeof e.message === "string" ? e.message : "gemini error event";
+        const errDetail = extractErrorDetail(e, event);
         settle(() => onError(new GeminiOutputError(errDetail, errDetail)));
       }
     }
   });
 
-  // Drain stderr to prevent the subprocess from blocking on a full pipe
-  cp.stderr?.on("data", () => {});
+  // buffer last 4 KB of stderr for diagnostics on non-zero exit
+  let stderrTail = "";
+  cp.stderr?.on("data", (data: Buffer) => {
+    stderrTail = (stderrTail + data.toString("utf8")).slice(-4096);
+  });
 
   cp.on("error", (err) => {
     const detail = err.message;
@@ -516,13 +515,12 @@ export function spawnGemini(
       settle(() => onDone(accumulated));
     } else {
       const reason = signal ? `signal ${signal}` : `code ${code}`;
+      const detail = stderrTail.trim();
+      const msg = detail
+        ? `gemini process exited with ${reason}: ${detail}`
+        : `gemini process exited with ${reason}`;
       settle(() =>
-        onError(
-          new GeminiOutputError(
-            `gemini process exited with ${reason}`,
-            `gemini process exited with ${reason}`
-          )
-        )
+        onError(new GeminiOutputError(msg, `gemini process exited with ${reason}`))
       );
     }
   });
@@ -771,7 +769,7 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
  *    Gemini CLI OAuth credential access (~/.config/gemini); it is not a
  *    sandbox boundary.
  *  - --yolo auto-approves Gemini's own tool use (prevents hanging in non-interactive mode)
- *  - --output-format json gives structured, parseable output
+ *  - --output-format stream-json gives structured, parseable NDJSON output
  */
 export async function runGemini(
   prompt: string,
@@ -881,9 +879,6 @@ export async function runGemini(
           return runWithWarmProcess(wp, expandedPrompt, TIMEOUT_MS, onChunk);
         }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
       } catch (err) {
-        if (opts.model && err instanceof Error) {
-          err.message = `(model: ${opts.model}) ${err.message}`;
-        }
         const homeDirForTelemetry = process.env.HOME ?? "";
         let telemetryError: string;
         if (err instanceof GeminiOutputError) {
@@ -976,9 +971,6 @@ export async function runGemini(
           return stdout;
         }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
       } catch (err) {
-        if (opts.model && err instanceof Error) {
-          err.message = `(model: ${opts.model}) ${err.message}`;
-        }
         const homeDirForTelemetry = process.env.HOME ?? "";
         let telemetryError: string;
         if (err instanceof GeminiOutputError) {
@@ -1020,6 +1012,10 @@ export async function runGemini(
           );
         }
 
+        // prepend model after telemetry so aggregation keys stay clean
+        if (opts.model && err instanceof Error) {
+          err.message = `(model: ${opts.model}) ${err.message}`;
+        }
         throw err;
       }
     }
@@ -1070,20 +1066,15 @@ export async function runGemini(
   }
 }
 
+/** @deprecated No longer used — output parsing migrated to inline NDJSON in spawnGemini/runWithWarmProcess. Retained for downstream consumers. */
 export interface GeminiJsonOutput {
-  // The Gemini CLI --output-format json shape (verified empirically).
-  // Field names may differ across CLI versions — the fallback chain handles this.
   response?: string;
   text?: string;
   content?: string;
   error?: string;
-  // Unused stats fields omitted
 }
 
-/**
- * Exported for unit testing. Parse the raw JSON stdout from `gemini --output-format json`.
- * Throws descriptive errors for all failure modes so callers can diagnose issues.
- */
+/** @deprecated No longer used in production — see GeminiJsonOutput. */
 export function parseGeminiOutput(raw: string): string {
   let parsed: unknown;
   try {

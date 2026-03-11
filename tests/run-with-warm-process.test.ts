@@ -35,7 +35,7 @@ function makeWarmProcess(): {
     kill: vi.fn(),
   });
 
-  const wp: WarmProcess = { cp, pid: 42 };
+  const wp: WarmProcess = { cp, pid: 42, readyAt: Date.now() };
 
   return {
     wp,
@@ -174,6 +174,26 @@ describe("runWithWarmProcess", () => {
     emitClose(1);
 
     await expect(promise).rejects.toThrow("upstream error");
+  });
+
+  it("type:error with object e.message is JSON.stringified", async () => {
+    const { wp, emitData, emitClose } = makeWarmProcess();
+    const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
+
+    emitData(`${JSON.stringify({ type: "error", message: { detail: "bad request" } })}\n`);
+    emitClose(1);
+
+    await expect(promise).rejects.toThrow("bad request");
+  });
+
+  it("result:error with non-string e.message is JSON.stringified", async () => {
+    const { wp, emitData, emitClose } = makeWarmProcess();
+    const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
+
+    emitData(`${JSON.stringify({ type: "result", status: "error", message: { detail: "invalid" } })}\n`);
+    emitClose(1);
+
+    await expect(promise).rejects.toThrow("invalid");
   });
 
   it("rejects when process closes with non-zero exit code", async () => {

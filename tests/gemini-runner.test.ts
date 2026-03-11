@@ -1644,6 +1644,98 @@ describe("spawnGemini — NDJSON parsing", () => {
     expect(result).toBe("actual response");
     expect(chunks).toEqual(["actual response"]);
   });
+
+  // ── error detail extraction (#65) ──────────────────────────────────────────
+
+  it("result:error with object e.error is JSON.stringified", async () => {
+    const err = await new Promise<Error>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        () => reject(new Error("should not resolve")),
+        resolve
+      );
+
+      const errorObj = { code: "RESOURCE_EXHAUSTED", details: "rate limit" };
+      const lines = JSON.stringify({
+        type: "result", status: "error", error: errorObj,
+      }) + "\n";
+
+      (cp as unknown as { stdout: EventEmitter }).stdout.emit("data", Buffer.from(lines));
+      (cp as unknown as EventEmitter).emit("close", 1);
+    });
+
+    expect(err).toBeInstanceOf(GeminiOutputError);
+    expect(err.message).toContain("RESOURCE_EXHAUSTED");
+  });
+
+  it("result:error with no error/message logs unrecognized event", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const err = await new Promise<Error>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        () => reject(new Error("should not resolve")),
+        resolve
+      );
+
+      const lines = JSON.stringify({ type: "result", status: "error" }) + "\n";
+
+      (cp as unknown as { stdout: EventEmitter }).stdout.emit("data", Buffer.from(lines));
+      (cp as unknown as EventEmitter).emit("close", 1);
+    });
+
+    expect(err.message).toContain("(unknown)");
+    const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toContain("unrecognized error event");
+    stderrSpy.mockRestore();
+  });
+
+  it("type:error with object e.message is JSON.stringified", async () => {
+    const err = await new Promise<Error>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        () => reject(new Error("should not resolve")),
+        resolve
+      );
+
+      const lines = JSON.stringify({
+        type: "error", message: { detail: "bad request" },
+      }) + "\n";
+
+      (cp as unknown as { stdout: EventEmitter }).stdout.emit("data", Buffer.from(lines));
+      (cp as unknown as EventEmitter).emit("close", 1);
+    });
+
+    expect(err).toBeInstanceOf(GeminiOutputError);
+    expect(err.message).toContain("bad request");
+  });
+
+  it("non-zero exit includes stderr tail in error message", async () => {
+    const err = await new Promise<Error>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        () => reject(new Error("should not resolve")),
+        resolve
+      );
+
+      // emit stderr before close
+      (cp as unknown as { stderr: EventEmitter }).stderr.emit(
+        "data", Buffer.from("Error: auth token expired\n")
+      );
+      (cp as unknown as EventEmitter).emit("close", 1);
+    });
+
+    expect(err).toBeInstanceOf(GeminiOutputError);
+    expect(err.message).toContain("auth token expired");
+    expect(err.message).toContain("code 1");
+  });
 });
 
 // ── SemaphoreTimeoutError ───────────────────────────────────────────────────

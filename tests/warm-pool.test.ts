@@ -348,13 +348,13 @@ describe("WarmProcessPool", () => {
     expect(wp2.readyAt).toBeGreaterThanOrEqual(now - 100);
   });
 
-  it("no stderr signal keeps readyAt at timer value", async () => {
+  it("no stderr signal keeps readyAt at timer value (in the future)", async () => {
     const pool = new WarmProcessPool(1, [], {}, 5_000);
     const wp = await pool.acquire();
 
-    // readyAt should be approximately Date.now() + 5000 (set at spawn time)
-    // Since we spawned ~0ms ago, it should be in the future
-    expect(wp.readyAt).toBeGreaterThan(Date.now() - 100);
+    // readyAt should be ~Date.now() + 5000 (set at spawn time)
+    // must be in the future to distinguish from signal-based readyAt
+    expect(wp.readyAt).toBeGreaterThan(Date.now() + 4000);
   });
 
   // ── concurrent waiters ────────────────────────────────────────────────────

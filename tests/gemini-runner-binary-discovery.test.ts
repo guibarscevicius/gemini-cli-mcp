@@ -68,7 +68,7 @@ describe("discoverGeminiBinary", () => {
         ...actual,
         existsSync: vi.fn().mockReturnValue(false),
         readdirSync: vi.fn().mockImplementation(() => {
-          throw new Error("ENOENT: no such file");
+          throw Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
         }),
       };
     });
