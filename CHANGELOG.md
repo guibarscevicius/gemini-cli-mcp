@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.4.0...gemini-cli-mcp-v0.4.1) (2026-03-11)
+
+
+### Bug Fixes
+
+* address PR review findings — extract error helper, fix type:error detail, improve diagnostics ([73891db](https://github.com/guibarscevicius/gemini-cli-mcp/commit/73891db14a64e801bab0f21c8dde03966caf8a2c))
+* unregister requestId on wait timeout to prevent late MCP cancellation ([52015ce](https://github.com/guibarscevicius/gemini-cli-mcp/commit/52015cebff5f8fa4a83253d8dd490d17d433f612))
+* wait:true timeout fallback, warm pool first-run race, NDJSON error detail ([0a0a1b3](https://github.com/guibarscevicius/gemini-cli-mcp/commit/0a0a1b3ad39921c23565cd3aeedebbe534496c85))
+* wait:true timeout fallback, warm pool first-run race, NDJSON error detail ([986ddfa](https://github.com/guibarscevicius/gemini-cli-mcp/commit/986ddfa160cac8fa62f4c74c5429beb4f5a06f0a)), closes [#63](https://github.com/guibarscevicius/gemini-cli-mcp/issues/63) [#64](https://github.com/guibarscevicius/gemini-cli-mcp/issues/64) [#65](https://github.com/guibarscevicius/gemini-cli-mcp/issues/65)
+
 ## [0.4.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.3.0...gemini-cli-mcp-v0.4.0) (2026-03-10)
 
 
