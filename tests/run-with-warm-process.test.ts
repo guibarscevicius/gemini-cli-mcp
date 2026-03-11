@@ -35,7 +35,7 @@ function makeWarmProcess(): {
     kill: vi.fn(),
   });
 
-  const wp: WarmProcess = { cp, pid: 42 };
+  const wp: WarmProcess = { cp, pid: 42, readyAt: Date.now() };
 
   return {
     wp,
@@ -141,6 +141,31 @@ describe("runWithWarmProcess", () => {
     await expect(promise).rejects.toThrow("quota exceeded");
   });
 
+  it("result:error with object e.error is JSON.stringified in rejection", async () => {
+    const { wp, emitData, emitClose } = makeWarmProcess();
+    const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
+
+    const errorObj = { code: "RESOURCE_EXHAUSTED", details: "rate limit" };
+    emitData(`{"type":"result","status":"error","error":${JSON.stringify(errorObj)}}\n`);
+    emitClose(1);
+
+    await expect(promise).rejects.toThrow("RESOURCE_EXHAUSTED");
+  });
+
+  it("result:error with no string error/message includes 'unknown' and logs raw event", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { wp, emitData, emitClose } = makeWarmProcess();
+    const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
+
+    emitData('{"type":"result","status":"error"}\n');
+    emitClose(1);
+
+    await expect(promise).rejects.toThrow("(unknown)");
+    const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toContain("unrecognized error event");
+    stderrSpy.mockRestore();
+  });
+
   it("rejects with GeminiOutputError on type:error event", async () => {
     const { wp, emitData, emitClose } = makeWarmProcess();
     const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
@@ -149,6 +174,26 @@ describe("runWithWarmProcess", () => {
     emitClose(1);
 
     await expect(promise).rejects.toThrow("upstream error");
+  });
+
+  it("type:error with object e.message is JSON.stringified", async () => {
+    const { wp, emitData, emitClose } = makeWarmProcess();
+    const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
+
+    emitData(`${JSON.stringify({ type: "error", message: { detail: "bad request" } })}\n`);
+    emitClose(1);
+
+    await expect(promise).rejects.toThrow("bad request");
+  });
+
+  it("result:error with non-string e.message is JSON.stringified", async () => {
+    const { wp, emitData, emitClose } = makeWarmProcess();
+    const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
+
+    emitData(`${JSON.stringify({ type: "result", status: "error", message: { detail: "invalid" } })}\n`);
+    emitClose(1);
+
+    await expect(promise).rejects.toThrow("invalid");
   });
 
   it("rejects when process closes with non-zero exit code", async () => {

@@ -28,15 +28,25 @@ vi.mock("../../src/job-store.js", () => ({
   cancelJob: vi.fn(),
 }));
 
+vi.mock("../../src/request-map.js", () => ({
+  registerRequest: vi.fn(),
+  unregisterRequest: vi.fn(),
+  unregisterByJobId: vi.fn(),
+  getJobByRequestId: vi.fn(),
+  clearMap: vi.fn(),
+}));
+
 import { runGemini } from "../../src/gemini-runner.js";
 import { sessionStore } from "../../src/session-store.js";
 import * as jobStore from "../../src/job-store.js";
+import { unregisterRequest } from "../../src/request-map.js";
 import { geminiReply } from "../../src/tools/gemini-reply.js";
 import { DEFAULT_WAIT_MS } from "../../src/tools/shared.js";
 
 const mockRunGemini = vi.mocked(runGemini);
 const mockStore = vi.mocked(sessionStore);
 const mockJobStore = vi.mocked(jobStore);
+const mockUnregisterRequest = vi.mocked(unregisterRequest);
 
 const VALID_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -398,5 +408,21 @@ describe("geminiReply", () => {
       code: ErrorCode.InternalError,
       message: expect.stringContaining("subprocess crashed"),
     });
+  });
+
+  // ── #63: wait:true timeout must unregister to prevent late cancellation ──
+
+  it("wait:true timeout unregisters requestId to prevent late cancellation", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "partial",
+      createdAt: Date.now(),
+      completion: new Promise<string>(() => {}),
+    });
+    await geminiReply(
+      { sessionId: VALID_SESSION_ID, prompt: "follow up", wait: true, waitTimeoutMs: 1 },
+      { requestId: "req-99" }
+    );
+    expect(mockUnregisterRequest).toHaveBeenCalledWith("req-99");
   });
 });

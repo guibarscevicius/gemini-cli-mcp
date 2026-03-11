@@ -79,10 +79,17 @@ export class WarmProcessPool {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Drain stderr so a full pipe buffer never stalls the subprocess.
-    cp.stderr?.on("data", () => {});
-
     const wp: WarmProcess = { cp, pid: cp.pid, readyAt: Date.now() + this.startupMs };
+
+    // listen for first stderr output as a readiness heuristic — the CLI writes
+    // to stderr during startup (version info, auth checks, etc.). When we see
+    // any output the process is likely past initialization (not guaranteed).
+    const onStderrReady = () => {
+      wp.readyAt = Date.now();
+    };
+    cp.stderr?.once("data", onStderrReady);
+    // Drain remaining stderr so a full pipe buffer never stalls the subprocess.
+    cp.stderr?.on("data", () => {});
 
     // Keepalive: send a bare newline every KEEPALIVE_INTERVAL_MS so the CLI
     // does not exit with "No input provided via stdin" after ~14 s idle.
@@ -136,6 +143,7 @@ export class WarmProcessPool {
     if (waiter) {
       if (waiter.timer !== undefined) clearTimeout(waiter.timer);
       clearInterval(keepAliveInterval);
+      cp.stderr?.removeListener("data", onStderrReady);
       this.consecutiveSpawnFailures = 0;
       waiter.resolve(wp);
       // Spawn a replacement so pool capacity is maintained.

@@ -29,15 +29,26 @@ vi.mock("../../src/job-store.js", () => ({
   cancelJob: vi.fn(),
 }));
 
+vi.mock("../../src/request-map.js", () => ({
+  registerRequest: vi.fn(),
+  unregisterRequest: vi.fn(),
+  unregisterByJobId: vi.fn(),
+  getJobByRequestId: vi.fn(),
+  clearMap: vi.fn(),
+}));
+
 import { runGemini } from "../../src/gemini-runner.js";
 import { sessionStore } from "../../src/session-store.js";
 import * as jobStore from "../../src/job-store.js";
+import { registerRequest, unregisterRequest } from "../../src/request-map.js";
 import { askGemini } from "../../src/tools/ask-gemini.js";
 import { DEFAULT_WAIT_MS } from "../../src/tools/shared.js";
 
 const mockRunGemini = vi.mocked(runGemini);
 const mockStore = vi.mocked(sessionStore);
 const mockJobStore = vi.mocked(jobStore);
+const mockUnregisterRequest = vi.mocked(unregisterRequest);
+const mockRegisterRequest = vi.mocked(registerRequest);
 
 // Helper to drain the microtask queue so fire-and-forget .then() callbacks run
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -407,5 +418,45 @@ describe("askGemini", () => {
     const result = await askGemini({ prompt: "hello" });
     expect(result).not.toHaveProperty("response");
     expect(result).not.toHaveProperty("partialResponse");
+  });
+
+  // ── #63: wait:true timeout must NOT cancel the job ────────────────────────
+
+  it("wait:true timeout does NOT call cancelJob", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "partial",
+      createdAt: Date.now(),
+      completion: new Promise<string>(() => {}),
+    });
+    await askGemini({ prompt: "hello", wait: true, waitTimeoutMs: 1 });
+    expect(mockJobStore.cancelJob).not.toHaveBeenCalled();
+  });
+
+  it("wait:true timeout does NOT kill subprocess", async () => {
+    const mockKill = vi.fn();
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: new Promise<string>(() => {}),
+      subprocess: { kill: mockKill },
+    });
+    await askGemini({ prompt: "hello", wait: true, waitTimeoutMs: 1 });
+    expect(mockKill).not.toHaveBeenCalled();
+  });
+
+  it("wait:true timeout unregisters requestId to prevent late cancellation", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "partial",
+      createdAt: Date.now(),
+      completion: new Promise<string>(() => {}),
+    });
+    await askGemini(
+      { prompt: "hello", wait: true, waitTimeoutMs: 1 },
+      { requestId: "req-42" }
+    );
+    expect(mockUnregisterRequest).toHaveBeenCalledWith("req-42");
   });
 });

@@ -325,6 +325,38 @@ describe("WarmProcessPool", () => {
     vi.useRealTimers();
   });
 
+  // ── stderr readiness signal (#64) ────────────────────────────────────────
+
+  it("stderr output before timer fires sets readyAt to now", async () => {
+    const pool = new WarmProcessPool(1, [], {}, 30_000);
+    const cp = spawnCalls[0];
+    const wp = await pool.acquire();
+
+    // readyAt should initially be in the future (~30s from spawn)
+    const beforeSignal = wp.readyAt;
+    expect(beforeSignal).toBeGreaterThan(Date.now() + 10_000);
+
+    // Replacement process gets stderr signal → readyAt updated
+    const replacement = spawnCalls[1];
+    const now = Date.now();
+    replacement.stderr!.emit("data", Buffer.from("Gemini CLI v1.0\n"));
+    await flushMicrotasks();
+
+    // Acquire the replacement to check its readyAt
+    const wp2 = await pool.acquire();
+    expect(wp2.readyAt).toBeLessThanOrEqual(Date.now());
+    expect(wp2.readyAt).toBeGreaterThanOrEqual(now - 100);
+  });
+
+  it("no stderr signal keeps readyAt at timer value (in the future)", async () => {
+    const pool = new WarmProcessPool(1, [], {}, 5_000);
+    const wp = await pool.acquire();
+
+    // readyAt should be ~Date.now() + 5000 (set at spawn time)
+    // must be in the future to distinguish from signal-based readyAt
+    expect(wp.readyAt).toBeGreaterThan(Date.now() + 4000);
+  });
+
   // ── concurrent waiters ────────────────────────────────────────────────────
 
   // Note: this tests sequential acquire() ordering (ready-queue FIFO), not
