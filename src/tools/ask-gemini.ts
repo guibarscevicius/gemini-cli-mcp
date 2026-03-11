@@ -109,6 +109,9 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
       // tool call returns. Works because onChunk checks ctx.progressToken before sending.
       delete ctx.progressToken;
       if (result.timedOut) {
+        // unregister so a late notifications/cancelled from the MCP
+        // client cannot kill the still-running background job
+        if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
         return { jobId, sessionId, partialResponse: result.partialResponse, timedOut: true, pollIntervalMs: 2000 };
       }
       return { jobId, sessionId, response: result.response, pollIntervalMs: 2000 };
