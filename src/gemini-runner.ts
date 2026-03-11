@@ -153,6 +153,16 @@ export let warmPool: WarmProcessPool | null = null;
 const SETUP_MODE = process.argv.includes("--setup");
 
 if (POOL_ENABLED && !SETUP_MODE) {
+  const geminiConfigDir = nodePath.join(os.homedir(), ".config", "gemini");
+  const isFirstRun = !existsSync(geminiConfigDir);
+  const effectiveStartupMs = isFirstRun
+    ? Math.max(Math.round(POOL_STARTUP_MS * 2.5), 30_000)
+    : POOL_STARTUP_MS;
+  if (isFirstRun) {
+    process.stderr.write(
+      `[gemini-cli-mcp] first run detected — increased pool startup to ${effectiveStartupMs}ms\n`
+    );
+  }
   warmPool = new WarmProcessPool(
     Number.isFinite(POOL_SIZE) && POOL_SIZE >= 1 ? POOL_SIZE : MAX_CONCURRENT,
     ["--yolo", "--output-format", "stream-json"],
@@ -160,7 +170,7 @@ if (POOL_ENABLED && !SETUP_MODE) {
       HOME: process.env.HOME ?? "",
       PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     },
-    POOL_STARTUP_MS,
+    effectiveStartupMs,
     GEMINI_BINARY
   );
 }
@@ -315,7 +325,16 @@ export function runWithWarmProcess(
                 ? e.error
                 : typeof e.message === "string"
                   ? e.message
-                  : "gemini result error";
+                  : e.error != null
+                    ? JSON.stringify(e.error)
+                    : e.message != null
+                      ? JSON.stringify(e.message)
+                      : "gemini result error (unknown)";
+            if (errDetail.includes("(unknown)")) {
+              process.stderr.write(
+                `[gemini-cli-mcp] unrecognized error event: ${JSON.stringify(event)}\n`
+              );
+            }
             settle(() => reject(new GeminiOutputError(errDetail, errDetail)));
           }
         } else if (e.type === "error") {
@@ -451,7 +470,16 @@ export function spawnGemini(
               ? e.error
               : typeof e.message === "string"
                 ? e.message
-                : "gemini result error";
+                : e.error != null
+                  ? JSON.stringify(e.error)
+                  : e.message != null
+                    ? JSON.stringify(e.message)
+                    : "gemini result error (unknown)";
+          if (errDetail.includes("(unknown)")) {
+            process.stderr.write(
+              `[gemini-cli-mcp] unrecognized error event: ${JSON.stringify(event)}\n`
+            );
+          }
           settle(() => onError(new GeminiOutputError(errDetail, errDetail)));
         }
       } else if (e.type === "error") {
@@ -853,6 +881,9 @@ export async function runGemini(
           return runWithWarmProcess(wp, expandedPrompt, TIMEOUT_MS, onChunk);
         }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
       } catch (err) {
+        if (opts.model && err instanceof Error) {
+          err.message = `(model: ${opts.model}) ${err.message}`;
+        }
         const homeDirForTelemetry = process.env.HOME ?? "";
         let telemetryError: string;
         if (err instanceof GeminiOutputError) {
@@ -945,6 +976,9 @@ export async function runGemini(
           return stdout;
         }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
       } catch (err) {
+        if (opts.model && err instanceof Error) {
+          err.message = `(model: ${opts.model}) ${err.message}`;
+        }
         const homeDirForTelemetry = process.env.HOME ?? "";
         let telemetryError: string;
         if (err instanceof GeminiOutputError) {

@@ -141,6 +141,31 @@ describe("runWithWarmProcess", () => {
     await expect(promise).rejects.toThrow("quota exceeded");
   });
 
+  it("result:error with object e.error is JSON.stringified in rejection", async () => {
+    const { wp, emitData, emitClose } = makeWarmProcess();
+    const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
+
+    const errorObj = { code: "RESOURCE_EXHAUSTED", details: "rate limit" };
+    emitData(`{"type":"result","status":"error","error":${JSON.stringify(errorObj)}}\n`);
+    emitClose(1);
+
+    await expect(promise).rejects.toThrow("RESOURCE_EXHAUSTED");
+  });
+
+  it("result:error with no string error/message includes 'unknown' and logs raw event", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { wp, emitData, emitClose } = makeWarmProcess();
+    const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
+
+    emitData('{"type":"result","status":"error"}\n');
+    emitClose(1);
+
+    await expect(promise).rejects.toThrow("(unknown)");
+    const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toContain("unrecognized error event");
+    stderrSpy.mockRestore();
+  });
+
   it("rejects with GeminiOutputError on type:error event", async () => {
     const { wp, emitData, emitClose } = makeWarmProcess();
     const promise = runWithWarmProcess(wp, "hi", 5000, undefined);

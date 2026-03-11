@@ -408,4 +408,30 @@ describe("askGemini", () => {
     expect(result).not.toHaveProperty("response");
     expect(result).not.toHaveProperty("partialResponse");
   });
+
+  // ── #63: wait:true timeout must NOT cancel the job ────────────────────────
+
+  it("wait:true timeout does NOT call cancelJob", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "partial",
+      createdAt: Date.now(),
+      completion: new Promise<string>(() => {}),
+    });
+    await askGemini({ prompt: "hello", wait: true, waitTimeoutMs: 1 });
+    expect(mockJobStore.cancelJob).not.toHaveBeenCalled();
+  });
+
+  it("wait:true timeout does NOT kill subprocess", async () => {
+    const mockKill = vi.fn();
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: new Promise<string>(() => {}),
+      subprocess: { kill: mockKill },
+    });
+    await askGemini({ prompt: "hello", wait: true, waitTimeoutMs: 1 });
+    expect(mockKill).not.toHaveBeenCalled();
+  });
 });

@@ -97,10 +97,8 @@ export async function waitForJob(
     return { response };
   } catch (err) {
     if (err === WAIT_TIMEOUT) {
-      job.subprocess?.kill("SIGTERM");
-      jobStore.cancelJob(jobId);
       process.stderr.write(
-        `[gemini-cli-mcp] wait-mode timed out after ${timeoutMs}ms for job ${jobId} — falling back to async\n`
+        `[gemini-cli-mcp] wait-mode timed out after ${timeoutMs}ms for job ${jobId} — job continues in background, poll to retrieve result\n`
       );
       return { partialResponse: job.partialResponse, timedOut: true };
     }

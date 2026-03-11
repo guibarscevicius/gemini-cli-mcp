@@ -503,6 +503,25 @@ describe("runGemini", () => {
     expect(result).toBe("chunk-1chunk-2");
     expect(chunks).toEqual(["chunk-1", "chunk-2"]);
   });
+
+  // ── model name in errors (#65) ──────────────────────────────────────────
+
+  it("prepends model name to error when opts.model is set", async () => {
+    const exec = vi.fn().mockRejectedValue(new Error("quota exceeded"));
+    await expect(
+      runGemini("hello", { model: "gemini-2.5-pro" }, exec as unknown as GeminiExecutor)
+    ).rejects.toThrow("(model: gemini-2.5-pro) quota exceeded");
+  });
+
+  it("does not prepend model when opts.model is not set", async () => {
+    const exec = vi.fn().mockRejectedValue(new Error("quota exceeded"));
+    await expect(
+      runGemini("hello", {}, exec as unknown as GeminiExecutor)
+    ).rejects.toThrow("quota exceeded");
+    await expect(
+      runGemini("hello", {}, exec as unknown as GeminiExecutor)
+    ).rejects.not.toThrow("(model:");
+  });
 });
 
 describe("runGemini retries", () => {
