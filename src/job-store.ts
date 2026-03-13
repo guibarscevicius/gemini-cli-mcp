@@ -46,6 +46,14 @@ export function getJob(jobId: string): Job | undefined {
   return jobs.get(jobId);
 }
 
+export function getJobStats(): { active: number; total: number } {
+  let active = 0;
+  for (const job of jobs.values()) {
+    if (job.status === "pending") active++;
+  }
+  return { active, total: jobs.size };
+}
+
 export function appendChunk(jobId: string, chunk: string): void {
   const job = jobs.get(jobId);
   if (job && job.status === "pending") {

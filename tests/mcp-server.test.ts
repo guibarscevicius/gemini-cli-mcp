@@ -48,16 +48,27 @@ vi.mock("../src/tools/gemini-cancel.js", () => ({
   },
 }));
 
+vi.mock("../src/tools/gemini-health.js", () => ({
+  geminiHealth: vi.fn(),
+  geminiHealthToolDefinition: {
+    name: "gemini-health",
+    description: "stub",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+}));
+
 import { askGemini } from "../src/tools/ask-gemini.js";
 import { geminiReply } from "../src/tools/gemini-reply.js";
 import { geminiPoll } from "../src/tools/gemini-poll.js";
 import { geminiCancel } from "../src/tools/gemini-cancel.js";
+import { geminiHealth } from "../src/tools/gemini-health.js";
 import { handleCallTool } from "../src/dispatcher.js";
 
 const mockAskGemini = vi.mocked(askGemini);
 const mockGeminiReply = vi.mocked(geminiReply);
 const mockGeminiPoll = vi.mocked(geminiPoll);
 const mockGeminiCancel = vi.mocked(geminiCancel);
+const mockGeminiHealth = vi.mocked(geminiHealth);
 
 const VALID_JOB_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
@@ -67,6 +78,14 @@ beforeEach(() => {
   mockGeminiReply.mockResolvedValue({ jobId: VALID_JOB_ID });
   mockGeminiPoll.mockResolvedValue({ status: "done", response: "the answer" });
   mockGeminiCancel.mockResolvedValue({ cancelled: true, alreadyDone: false });
+  mockGeminiHealth.mockResolvedValue({
+    binary: { path: "/usr/local/bin/gemini" },
+    pool: { enabled: true, ready: 1, size: 2 },
+    concurrency: { max: 2, active: 0, queued: 0 },
+    jobs: { active: 0, total: 0 },
+    sessions: { total: 0 },
+    server: { uptime: 1, version: "0.5.0" },
+  });
 });
 
 describe("MCP dispatcher (handleCallTool)", () => {

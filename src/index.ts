@@ -15,6 +15,7 @@ import { askGeminiToolDefinition } from "./tools/ask-gemini.js";
 import { geminiReplyToolDefinition } from "./tools/gemini-reply.js";
 import { geminiPollToolDefinition } from "./tools/gemini-poll.js";
 import { geminiCancelToolDefinition } from "./tools/gemini-cancel.js";
+import { geminiHealthToolDefinition } from "./tools/gemini-health.js";
 import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
@@ -31,6 +32,7 @@ export function registerToolHandlers(server: ToolServer): void {
       geminiReplyToolDefinition,
       geminiPollToolDefinition,
       geminiCancelToolDefinition,
+      geminiHealthToolDefinition,
     ],
   }));
 

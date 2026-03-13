@@ -11,6 +11,7 @@ import { askGemini } from "./tools/ask-gemini.js";
 import { geminiReply } from "./tools/gemini-reply.js";
 import { geminiPoll } from "./tools/gemini-poll.js";
 import { geminiCancel } from "./tools/gemini-cancel.js";
+import { geminiHealth } from "./tools/gemini-health.js";
 
 export interface ToolCallContext {
   /**
@@ -73,6 +74,14 @@ export async function handleCallTool(
 
       case "gemini-cancel": {
         const result = await geminiCancel(args);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result as unknown as Record<string, unknown>,
+        };
+      }
+
+      case "gemini-health": {
+        const result = await geminiHealth(args);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
           structuredContent: result as unknown as Record<string, unknown>,

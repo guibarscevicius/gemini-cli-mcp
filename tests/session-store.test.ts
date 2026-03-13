@@ -32,6 +32,13 @@ describe("SessionStore", () => {
     expect(store.get(id)).toBe(true);
   });
 
+  it("getSessionCount() returns the total number of sessions", () => {
+    expect(store.getSessionCount()).toBe(0);
+    store.create("session-1");
+    store.create("session-2");
+    expect(store.getSessionCount()).toBe(2);
+  });
+
   it("appendTurn() and formatHistory() keep turn order", () => {
     const id = "session-order";
     store.create(id);
@@ -49,6 +56,17 @@ describe("SessionStore", () => {
     expect(lines[3]).toBe("User: q2");
     expect(lines[4]).toBe("Assistant: a2");
     expect(lines[5]).toBe("[End of history — continue the conversation]");
+  });
+
+  it("appendTurn on non-existent session drops the turn and leaves store consistent", () => {
+    const id = "rollback-test";
+    store.create(id);
+    store.appendTurn("ghost-session", "user", "should be dropped");
+    store.appendTurn(id, "user", "should work");
+    store.appendTurn(id, "assistant", "response");
+    const history = store.formatHistory(id);
+    expect(history).toContain("should work");
+    expect(history).not.toContain("should be dropped");
   });
 
   it("formatHistory() truncation", () => {

@@ -5,6 +5,7 @@ import { readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as nodePath from "node:path";
 import { escape as escapeGlob, glob } from "glob";
+import pLimit from "p-limit";
 import { WarmProcessPool, type WarmProcess } from "./warm-pool.js";
 
 export class GeminiOutputError extends Error {
@@ -67,6 +68,10 @@ class Semaphore {
     if (this.running <= 0) return; // defensive: should never be called without a matching acquire
     this.running--;
     this.queue.shift()?.();
+  }
+
+  stats(): { active: number; queued: number } {
+    return { active: this.running, queued: this.queue.length };
   }
 }
 
@@ -149,7 +154,7 @@ export function discoverGeminiBinary(): string {
   return "gemini"; // fallback to PATH; cold-spawn gives a clear ENOENT; warm pool detects after 5 failures
 }
 
-const GEMINI_BINARY: string = discoverGeminiBinary();
+export const GEMINI_BINARY: string = discoverGeminiBinary();
 
 export let warmPool: WarmProcessPool | null = null;
 
@@ -178,6 +183,18 @@ if (POOL_ENABLED && !SETUP_MODE) {
     effectiveStartupMs,
     GEMINI_BINARY
   );
+}
+
+export function getServerStats() {
+  return {
+    semaphore: semaphore.stats(),
+    pool: {
+      enabled: POOL_ENABLED,
+      ready: warmPool?.readyCount ?? 0,
+      size: warmPool?.size ?? 0,
+    },
+    maxConcurrent: MAX_CONCURRENT,
+  };
 }
 
 const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES ?? "3", 10);
@@ -680,61 +697,71 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
     throw new Error(`cwd does not exist or is not accessible: ${cwdResolved}`, { cause: err });
   }
 
-  const sections: string[] = [];
+  const limit = pLimit(8);
+  const sectionGroups = await Promise.all(
+    fileRefs.map((rawPath) =>
+      limit(async () => {
+        let filePaths: string[];
+        if (/[*?{]/.test(rawPath)) {
+          try {
+            filePaths = await glob(escapeGlobSegments(rawPath), {
+              cwd: realCwd,
+              absolute: true,
+              nodir: true,
+            });
+          } catch (err) {
+            throw new Error(
+              `Failed to expand glob pattern @${rawPath} in ${realCwd}: ${(err as Error).message}`,
+              { cause: err }
+            );
+          }
+          if (filePaths.length === 0) {
+            throw new Error(`File not found: @${rawPath} — no files matched in ${realCwd}`);
+          }
+        } else {
+          filePaths = [nodePath.resolve(realCwd, rawPath)];
+        }
 
-  for (const rawPath of fileRefs) {
+        return Promise.all(
+          filePaths.map(async (absPath) => {
+            // realpath() follows symlinks — prevents a symlink inside cwd from escaping the workspace
+            let realAbsPath: string;
+            try {
+              realAbsPath = await realpath(absPath);
+            } catch (err) {
+              const code = (err as { code?: string }).code;
+              const detail = code === "EACCES" ? "permission denied" : "does not exist";
+              throw new Error(`File not found: @${rawPath} — ${absPath} ${detail}`, { cause: err });
+            }
 
-    let filePaths: string[];
-    if (/[*?{]/.test(rawPath)) {
-      try {
-        filePaths = await glob(escapeGlobSegments(rawPath), { cwd: realCwd, absolute: true, nodir: true });
-      } catch (err) {
-        throw new Error(
-          `Failed to expand glob pattern @${rawPath} in ${realCwd}: ${(err as Error).message}`,
-          { cause: err }
+            const cwdPrefix = realCwd.endsWith(nodePath.sep) ? realCwd : realCwd + nodePath.sep;
+            if (!realAbsPath.startsWith(cwdPrefix) && realAbsPath !== realCwd) {
+              throw new Error(
+                `Path not in workspace: @${rawPath} resolves to ${realAbsPath} which is outside ${realCwd}`
+              );
+            }
+
+            const readErrorDetails: Record<string, string> = {
+              EISDIR: "is a directory — use a glob pattern like @src/**/*.ts",
+              EACCES: "permission denied",
+            };
+            let content: string;
+            try {
+              content = await readFile(realAbsPath, "utf-8");
+            } catch (err) {
+              const code = (err as { code?: string }).code ?? "unknown";
+              const detail = readErrorDetails[code] ?? `read failed (${code})`;
+              throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
+            }
+
+            const relPath = nodePath.relative(realCwd, realAbsPath);
+            return `Content from @${relPath}:\n${content}`;
+          })
         );
-      }
-      if (filePaths.length === 0) {
-        throw new Error(`File not found: @${rawPath} — no files matched in ${realCwd}`);
-      }
-    } else {
-      filePaths = [nodePath.resolve(realCwd, rawPath)];
-    }
-
-    for (const absPath of filePaths) {
-      // realpath() follows symlinks — prevents a symlink inside cwd from escaping the workspace
-      let realAbsPath: string;
-      try {
-        realAbsPath = await realpath(absPath);
-      } catch (err) {
-        const code = (err as { code?: string }).code;
-        const detail = code === "EACCES" ? "permission denied" : "does not exist";
-        throw new Error(`File not found: @${rawPath} — ${absPath} ${detail}`, { cause: err });
-      }
-
-      if (!realAbsPath.startsWith(realCwd + nodePath.sep) && realAbsPath !== realCwd) {
-        throw new Error(
-          `Path not in workspace: @${rawPath} resolves to ${realAbsPath} which is outside ${realCwd}`
-        );
-      }
-
-      const readErrorDetails: Record<string, string> = {
-        EISDIR: "is a directory — use a glob pattern like @src/**/*.ts",
-        EACCES: "permission denied",
-      };
-      let content: string;
-      try {
-        content = await readFile(realAbsPath, "utf-8");
-      } catch (err) {
-        const code = (err as { code?: string }).code ?? "unknown";
-        const detail = readErrorDetails[code] ?? `read failed (${code})`;
-        throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
-      }
-
-      const relPath = nodePath.relative(realCwd, realAbsPath);
-      sections.push(`Content from @${relPath}:\n${content}`);
-    }
-  }
+      })
+    )
+  );
+  const sections = sectionGroups.flat();
 
   // Mask @tokens in the prompt text to prevent double expansion by the CLI
   // We use a replacement function with the same regex to ensure consistency.

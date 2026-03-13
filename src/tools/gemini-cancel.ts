@@ -47,6 +47,14 @@ export const geminiCancelToolDefinition: Tool = {
     },
     required: ["jobId"],
   },
+  outputSchema: {
+    type: "object" as const,
+    properties: {
+      cancelled: { type: "boolean" },
+      alreadyDone: { type: "boolean" },
+    },
+    required: ["cancelled", "alreadyDone"],
+  },
   annotations: {
     title: "Cancel Gemini Job",
     readOnlyHint: false,
