@@ -7,6 +7,7 @@ import {
   createJob,
   failJob,
   getJob,
+  getJobStats,
   sweepExpiredJobs,
 } from "../src/job-store.js";
 
@@ -60,6 +61,20 @@ describe("appendChunk", () => {
     completeJob("j2", "final");
     appendChunk("j2", "extra");
     expect(getJob("j2")!.partialResponse).toBe("");
+  });
+});
+
+describe("getJobStats", () => {
+  it("counts only pending jobs as active", () => {
+    createJob("j1");
+    createJob("j2");
+    completeJob("j2", "done");
+    createJob("j3");
+    failJob("j3", "err");
+
+    const stats = getJobStats();
+    expect(stats.active).toBe(1);
+    expect(stats.total).toBe(3);
   });
 });
 

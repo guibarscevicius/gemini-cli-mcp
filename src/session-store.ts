@@ -23,6 +23,7 @@ export class SessionStore {
   private readonly stmtUpdateTurns: ReturnType<DatabaseSync["prepare"]>;
   private readonly stmtGcSelect: ReturnType<DatabaseSync["prepare"]>;
   private readonly stmtGcDelete: ReturnType<DatabaseSync["prepare"]>;
+  private readonly stmtCount: ReturnType<DatabaseSync["prepare"]>;
   /** Maps sessionId → jobId for in-flight async jobs. */
   private pendingJobs = new Map<string, string>();
 
@@ -54,14 +55,21 @@ export class SessionStore {
     );
     this.stmtGcSelect = this.db.prepare("SELECT id FROM sessions WHERE last_accessed < ?");
     this.stmtGcDelete = this.db.prepare("DELETE FROM sessions WHERE last_accessed < ?");
+    this.stmtCount = this.db.prepare("SELECT COUNT(*) as n FROM sessions");
 
     this.gcTimer = setInterval(() => {
-      const cutoff = Date.now() - ttlMs;
-      const expiredRows = this.stmtGcSelect.all(cutoff) as { id: string }[];
-      for (const row of expiredRows) {
-        this.pendingJobs.delete(row.id);
+      try {
+        const cutoff = Date.now() - ttlMs;
+        const expiredRows = this.stmtGcSelect.all(cutoff) as { id: string }[];
+        for (const row of expiredRows) {
+          this.pendingJobs.delete(row.id);
+        }
+        this.stmtGcDelete.run(cutoff);
+      } catch (err) {
+        process.stderr.write(
+          `[gemini-cli-mcp] session GC failed: ${err instanceof Error ? err.message : String(err)}\n`
+        );
       }
-      this.stmtGcDelete.run(cutoff);
     }, gcIntervalMs);
 
     if (this.gcTimer.unref) this.gcTimer.unref();
@@ -120,7 +128,7 @@ export class SessionStore {
   }
 
   getSessionCount(): number {
-    return (this.db.prepare("SELECT COUNT(*) as n FROM sessions").get() as { n: number }).n;
+    return (this.stmtCount.get() as { n: number }).n;
   }
 
   setPendingJob(sessionId: string, jobId: string): void {

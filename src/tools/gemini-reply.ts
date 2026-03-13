@@ -6,6 +6,7 @@ import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
 import { runGeminiAsync, waitForJob, DEFAULT_WAIT_MS } from "./shared.js";
 import { registerRequest, unregisterRequest } from "../request-map.js";
+import { SemaphoreTimeoutError } from "../gemini-runner.js";
 
 export const GeminiReplySchema = z.object({
   sessionId: z.string().uuid().describe("Session ID returned by ask-gemini"),
@@ -92,12 +93,13 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
       try {
         sessionStore.appendTurn(sessionId, "user", prompt);
         sessionStore.appendTurn(sessionId, "assistant", response);
-        sessionStore.clearPendingJob(sessionId);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         process.stderr.write(
           `[gemini-cli-mcp] session ${sessionId} history update failed (non-fatal): ${msg}\n`
         );
+      } finally {
+        sessionStore.clearPendingJob(sessionId);
       }
       if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
     })
@@ -132,6 +134,9 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
       // Stop the background onChunk from sending further notifications after the
       // tool call returns. Works because onChunk checks ctx.progressToken before sending.
       delete ctx.progressToken;
+      if (err instanceof SemaphoreTimeoutError) {
+        throw new McpError(ErrorCode.InvalidRequest, err.message);
+      }
       throw new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
     }
   }

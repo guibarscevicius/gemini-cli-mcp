@@ -72,6 +72,13 @@ describe("request-map", () => {
     expect(getJobByRequestId("req-1")).toBe("job-b");
   });
 
+  it("re-registering same jobId under new requestId evicts the old requestId", () => {
+    registerRequest("req-1", "job-a");
+    registerRequest("req-2", "job-a");
+    expect(getJobByRequestId("req-1")).toBeUndefined();
+    expect(getJobByRequestId("req-2")).toBe("job-a");
+  });
+
   it("clearMap removes all entries", () => {
     registerRequest("req-1", "job-a");
     registerRequest("req-2", "job-b");

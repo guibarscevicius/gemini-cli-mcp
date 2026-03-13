@@ -184,14 +184,6 @@ describe("MCP dispatcher (handleCallTool)", () => {
     expect(mockGeminiCancel).toHaveBeenCalledWith({ jobId: VALID_JOB_ID });
   });
 
-  it("dispatches gemini-health and returns JSON content", async () => {
-    const result = await handleCallTool("gemini-health", {});
-    const parsed = JSON.parse(result.content[0].text);
-    expect(result.structuredContent).toBeDefined();
-    expect(result.structuredContent).toEqual(parsed);
-    expect(parsed.binary.path).toBe("/usr/local/bin/gemini");
-  });
-
   // ── Unknown tool ───────────────────────────────────────────────────────────
 
   it("throws McpError(MethodNotFound) for unknown tool name", async () => {

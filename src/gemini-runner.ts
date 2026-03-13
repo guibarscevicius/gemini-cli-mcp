@@ -154,7 +154,7 @@ export function discoverGeminiBinary(): string {
   return "gemini"; // fallback to PATH; cold-spawn gives a clear ENOENT; warm pool detects after 5 failures
 }
 
-const GEMINI_BINARY: string = discoverGeminiBinary();
+export const GEMINI_BINARY: string = discoverGeminiBinary();
 
 export let warmPool: WarmProcessPool | null = null;
 
@@ -734,7 +734,8 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
               throw new Error(`File not found: @${rawPath} — ${absPath} ${detail}`, { cause: err });
             }
 
-            if (!realAbsPath.startsWith(realCwd + nodePath.sep) && realAbsPath !== realCwd) {
+            const cwdPrefix = realCwd.endsWith(nodePath.sep) ? realCwd : realCwd + nodePath.sep;
+            if (!realAbsPath.startsWith(cwdPrefix) && realAbsPath !== realCwd) {
               throw new Error(
                 `Path not in workspace: @${rawPath} resolves to ${realAbsPath} which is outside ${realCwd}`
               );

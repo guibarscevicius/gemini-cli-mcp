@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/gemini-runner.js", () => ({
-  discoverGeminiBinary: vi.fn(),
+const runnerMock = vi.hoisted(() => ({
+  geminiBinary: "/usr/local/bin/gemini",
   getServerStats: vi.fn(),
+}));
+
+vi.mock("../../src/gemini-runner.js", () => ({
+  get GEMINI_BINARY() {
+    return runnerMock.geminiBinary;
+  },
+  getServerStats: runnerMock.getServerStats,
 }));
 
 vi.mock("../../src/job-store.js", () => ({
@@ -15,20 +22,19 @@ vi.mock("../../src/session-store.js", () => ({
   },
 }));
 
-import { discoverGeminiBinary, getServerStats } from "../../src/gemini-runner.js";
+import { getServerStats } from "../../src/gemini-runner.js";
 import { getJobStats } from "../../src/job-store.js";
 import { sessionStore } from "../../src/session-store.js";
 import { handleCallTool } from "../../src/dispatcher.js";
 import { geminiHealth } from "../../src/tools/gemini-health.js";
 
-const mockDiscoverGeminiBinary = vi.mocked(discoverGeminiBinary);
 const mockGetServerStats = vi.mocked(getServerStats);
 const mockGetJobStats = vi.mocked(getJobStats);
 const mockSessionStore = vi.mocked(sessionStore);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockDiscoverGeminiBinary.mockReturnValue("/usr/local/bin/gemini");
+  runnerMock.geminiBinary = "/usr/local/bin/gemini";
   mockGetServerStats.mockReturnValue({
     semaphore: { active: 2, queued: 3 },
     pool: { enabled: true, ready: 1, size: 4 },
@@ -57,7 +63,7 @@ describe("geminiHealth", () => {
   });
 
   it("maps fallback 'gemini' binary to null path", async () => {
-    mockDiscoverGeminiBinary.mockReturnValue("gemini");
+    runnerMock.geminiBinary = "gemini";
     const result = await geminiHealth({});
     expect(result.binary.path).toBeNull();
   });

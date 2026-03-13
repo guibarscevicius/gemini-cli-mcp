@@ -1,12 +1,13 @@
 import { z } from "zod";
+import { createRequire } from "node:module";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { discoverGeminiBinary, getServerStats } from "../gemini-runner.js";
+import { GEMINI_BINARY, getServerStats } from "../gemini-runner.js";
 import { getJobStats } from "../job-store.js";
 import { sessionStore } from "../session-store.js";
 
 const GeminiHealthSchema = z.object({}).optional();
-
-const TOOL_VERSION = "0.5.0";
+const _require = createRequire(import.meta.url);
+const SERVER_VERSION: string = (_require("../../package.json") as { version: string }).version;
 
 export interface GeminiHealthOutput {
   binary: { path: string | null };
@@ -20,7 +21,7 @@ export interface GeminiHealthOutput {
 export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> {
   GeminiHealthSchema.parse(input);
 
-  const binaryPath = discoverGeminiBinary();
+  const binaryPath = GEMINI_BINARY;
   const serverStats = getServerStats();
   const jobStats = getJobStats();
 
@@ -45,7 +46,7 @@ export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> 
     },
     server: {
       uptime: process.uptime(),
-      version: TOOL_VERSION,
+      version: SERVER_VERSION,
     },
   };
 }

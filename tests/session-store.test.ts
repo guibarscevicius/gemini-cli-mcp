@@ -58,6 +58,17 @@ describe("SessionStore", () => {
     expect(lines[5]).toBe("[End of history — continue the conversation]");
   });
 
+  it("appendTurn on non-existent session drops the turn and leaves store consistent", () => {
+    const id = "rollback-test";
+    store.create(id);
+    store.appendTurn("ghost-session", "user", "should be dropped");
+    store.appendTurn(id, "user", "should work");
+    store.appendTurn(id, "assistant", "response");
+    const history = store.formatHistory(id);
+    expect(history).toContain("should work");
+    expect(history).not.toContain("should be dropped");
+  });
+
   it("formatHistory() truncation", () => {
     const id = "session-truncate";
     store.create(id);
