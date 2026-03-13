@@ -89,8 +89,22 @@ export class SessionStore {
   getTurns(id: string): Turn[] | undefined {
     const row = this.stmtGetTurns.get(id) as { turns: string } | undefined;
     if (!row) return undefined;
-    this.stmtTouch.run(Date.now(), id);
-    return JSON.parse(row.turns) as Turn[];
+    try {
+      this.stmtTouch.run(Date.now(), id);
+    } catch (err) {
+      // Touch failure is non-fatal: TTL accuracy is less important than returning data.
+      process.stderr.write(
+        `[gemini-cli-mcp] getTurns: failed to touch session ${id}: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+    try {
+      return JSON.parse(row.turns) as Turn[];
+    } catch (err) {
+      process.stderr.write(
+        `[gemini-cli-mcp] getTurns: session ${id} has corrupt turn data: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      throw new Error(`Session ${id} has corrupt turn data and cannot be exported`);
+    }
   }
 
   appendTurn(id: string, role: TurnRole, content: string): void {

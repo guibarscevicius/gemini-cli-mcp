@@ -15,9 +15,15 @@ export type GeminiExportInput = z.infer<typeof GeminiExportSchema>;
 
 export interface GeminiExportOutput {
   sessionId: string;
+  /** Convenience count. Always equal to `turns.length`. Constructed only by `geminiExport()`. */
   turnCount: number;
   format: "json" | "markdown";
   turns: Turn[];
+  /**
+   * Pre-rendered representation of `turns` in the requested `format`.
+   * JSON: `JSON.stringify(turns, null, 2)`. Markdown: bold-label paragraphs.
+   * Always constructed by `geminiExport()` — do not construct this type directly.
+   */
   content: string;
   exportedAt: string;
 }
@@ -27,7 +33,7 @@ export async function geminiExport(input: unknown): Promise<GeminiExportOutput> 
 
   const turns = sessionStore.getTurns(sessionId);
   if (turns === undefined) {
-    throw new McpError(ErrorCode.InvalidParams, `Session not found: ${sessionId}`);
+    throw new McpError(ErrorCode.InvalidParams, `Session not found or expired: ${sessionId}`);
   }
 
   const content =
