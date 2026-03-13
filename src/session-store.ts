@@ -16,6 +16,13 @@ interface Turn {
 export class SessionStore {
   private db: DatabaseSync;
   private gcTimer: ReturnType<typeof setInterval>;
+  private readonly stmtCreate: ReturnType<DatabaseSync["prepare"]>;
+  private readonly stmtExists: ReturnType<DatabaseSync["prepare"]>;
+  private readonly stmtTouch: ReturnType<DatabaseSync["prepare"]>;
+  private readonly stmtGetTurns: ReturnType<DatabaseSync["prepare"]>;
+  private readonly stmtUpdateTurns: ReturnType<DatabaseSync["prepare"]>;
+  private readonly stmtGcSelect: ReturnType<DatabaseSync["prepare"]>;
+  private readonly stmtGcDelete: ReturnType<DatabaseSync["prepare"]>;
   /** Maps sessionId → jobId for in-flight async jobs. */
   private pendingJobs = new Map<string, string>();
 
@@ -36,50 +43,62 @@ export class SessionStore {
       last_accessed INTEGER NOT NULL
     )`);
 
+    this.stmtCreate = this.db.prepare(
+      "INSERT OR IGNORE INTO sessions (id, turns, last_accessed) VALUES (?, ?, ?)"
+    );
+    this.stmtExists = this.db.prepare("SELECT id FROM sessions WHERE id = ?");
+    this.stmtTouch = this.db.prepare("UPDATE sessions SET last_accessed = ? WHERE id = ?");
+    this.stmtGetTurns = this.db.prepare("SELECT turns FROM sessions WHERE id = ?");
+    this.stmtUpdateTurns = this.db.prepare(
+      "UPDATE sessions SET turns = ?, last_accessed = ? WHERE id = ?"
+    );
+    this.stmtGcSelect = this.db.prepare("SELECT id FROM sessions WHERE last_accessed < ?");
+    this.stmtGcDelete = this.db.prepare("DELETE FROM sessions WHERE last_accessed < ?");
+
     this.gcTimer = setInterval(() => {
       const cutoff = Date.now() - ttlMs;
-      const expiredRows = this.db.prepare("SELECT id FROM sessions WHERE last_accessed < ?").all(cutoff) as { id: string }[];
+      const expiredRows = this.stmtGcSelect.all(cutoff) as { id: string }[];
       for (const row of expiredRows) {
         this.pendingJobs.delete(row.id);
       }
-      this.db.prepare("DELETE FROM sessions WHERE last_accessed < ?").run(cutoff);
+      this.stmtGcDelete.run(cutoff);
     }, gcIntervalMs);
 
     if (this.gcTimer.unref) this.gcTimer.unref();
   }
 
   create(id: string): void {
-    this.db
-      .prepare("INSERT OR IGNORE INTO sessions (id, turns, last_accessed) VALUES (?, ?, ?)")
-      .run(id, JSON.stringify([]), Date.now());
+    this.stmtCreate.run(id, JSON.stringify([]), Date.now());
   }
 
   get(id: string): boolean {
-    const row = this.db.prepare("SELECT id FROM sessions WHERE id = ?").get(id);
+    const row = this.stmtExists.get(id);
     if (!row) return false;
-    this.db.prepare("UPDATE sessions SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
+    this.stmtTouch.run(Date.now(), id);
     return true;
   }
 
   appendTurn(id: string, role: TurnRole, content: string): void {
-    const row = this.db.prepare("SELECT turns FROM sessions WHERE id = ?").get(id) as
-      | { turns: string }
-      | undefined;
-    if (!row) {
-      process.stderr.write(`[gemini-cli-mcp] appendTurn: session ${id} not found — turn dropped\n`);
-      return;
+    this.db.exec("BEGIN");
+    try {
+      const row = this.stmtGetTurns.get(id) as { turns: string } | undefined;
+      if (!row) {
+        process.stderr.write(`[gemini-cli-mcp] appendTurn: session ${id} not found — turn dropped\n`);
+        this.db.exec("COMMIT");
+        return;
+      }
+      const turns: Turn[] = JSON.parse(row.turns);
+      turns.push({ role, content });
+      this.stmtUpdateTurns.run(JSON.stringify(turns), Date.now(), id);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
     }
-    const turns: Turn[] = JSON.parse(row.turns);
-    turns.push({ role, content });
-    this.db
-      .prepare("UPDATE sessions SET turns = ?, last_accessed = ? WHERE id = ?")
-      .run(JSON.stringify(turns), Date.now(), id);
   }
 
   formatHistory(id: string): string {
-    const row = this.db.prepare("SELECT turns FROM sessions WHERE id = ?").get(id) as
-      | { turns: string }
-      | undefined;
+    const row = this.stmtGetTurns.get(id) as { turns: string } | undefined;
     if (!row) return "";
     const allTurns: Turn[] = JSON.parse(row.turns);
     if (allTurns.length === 0) return "";
@@ -98,6 +117,10 @@ export class SessionStore {
     }
     lines.push("[End of history — continue the conversation]");
     return lines.join("\n");
+  }
+
+  getSessionCount(): number {
+    return (this.db.prepare("SELECT COUNT(*) as n FROM sessions").get() as { n: number }).n;
   }
 
   setPendingJob(sessionId: string, jobId: string): void {

@@ -183,6 +183,17 @@ export const geminiReplyToolDefinition: Tool = {
     },
     required: ["sessionId", "prompt"],
   },
+  outputSchema: {
+    type: "object" as const,
+    properties: {
+      jobId: { type: "string" },
+      pollIntervalMs: { type: "number" },
+      response: { type: "string" },
+      partialResponse: { type: "string" },
+      timedOut: { type: "boolean" },
+    },
+    required: ["jobId", "pollIntervalMs"],
+  },
   annotations: {
     title: "Continue Gemini Session",
     readOnlyHint: false,

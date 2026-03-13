@@ -14,6 +14,7 @@ import { askGeminiToolDefinition } from "../src/tools/ask-gemini.js";
 import { geminiReplyToolDefinition } from "../src/tools/gemini-reply.js";
 import { geminiPollToolDefinition } from "../src/tools/gemini-poll.js";
 import { geminiCancelToolDefinition } from "../src/tools/gemini-cancel.js";
+import { geminiHealthToolDefinition } from "../src/tools/gemini-health.js";
 
 type RequestHandler = (
   request: { params: Record<string, unknown> },
@@ -40,7 +41,7 @@ describe("index wiring", () => {
     } as Parameters<typeof registerToolHandlers>[0]);
   });
 
-  it("registers the list-tools handler with all four tool definitions", async () => {
+  it("registers the list-tools handler with all five tool definitions", async () => {
     const listTools = handlers.get(ListToolsRequestSchema);
     expect(listTools).toBeDefined();
     await expect(listTools!({ params: {} })).resolves.toEqual({
@@ -49,6 +50,7 @@ describe("index wiring", () => {
         geminiReplyToolDefinition,
         geminiPollToolDefinition,
         geminiCancelToolDefinition,
+        geminiHealthToolDefinition,
       ],
     });
   });

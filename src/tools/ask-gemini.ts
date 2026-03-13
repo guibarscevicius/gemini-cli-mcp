@@ -166,6 +166,18 @@ export const askGeminiToolDefinition: Tool = {
     },
     required: ["prompt"],
   },
+  outputSchema: {
+    type: "object" as const,
+    properties: {
+      jobId: { type: "string" },
+      sessionId: { type: "string" },
+      pollIntervalMs: { type: "number" },
+      response: { type: "string" },
+      partialResponse: { type: "string" },
+      timedOut: { type: "boolean" },
+    },
+    required: ["jobId", "sessionId", "pollIntervalMs"],
+  },
   annotations: {
     title: "Ask Gemini",
     readOnlyHint: false,

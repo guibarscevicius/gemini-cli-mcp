@@ -32,6 +32,13 @@ describe("SessionStore", () => {
     expect(store.get(id)).toBe(true);
   });
 
+  it("getSessionCount() returns the total number of sessions", () => {
+    expect(store.getSessionCount()).toBe(0);
+    store.create("session-1");
+    store.create("session-2");
+    expect(store.getSessionCount()).toBe(2);
+  });
+
   it("appendTurn() and formatHistory() keep turn order", () => {
     const id = "session-order";
     store.create(id);

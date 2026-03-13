@@ -52,6 +52,16 @@ export const geminiPollToolDefinition: Tool = {
     },
     required: ["jobId"],
   },
+  outputSchema: {
+    type: "object" as const,
+    properties: {
+      status: { type: "string", enum: ["pending", "done", "error", "cancelled"] },
+      partialResponse: { type: "string" },
+      response: { type: "string" },
+      error: { type: "string" },
+    },
+    required: ["status"],
+  },
   annotations: {
     title: "Poll Gemini Job",
     readOnlyHint: true,

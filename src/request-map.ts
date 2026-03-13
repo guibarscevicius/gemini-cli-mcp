@@ -12,24 +12,42 @@
  */
 
 const map = new Map<string, string>();
+const reverseMap = new Map<string, string>();
 
 function normalise(requestId: string | number): string {
   return String(requestId);
 }
 
 export function registerRequest(requestId: string | number, jobId: string): void {
-  map.set(normalise(requestId), jobId);
+  const normalizedId = normalise(requestId);
+  const existingJobId = map.get(normalizedId);
+  if (existingJobId !== undefined && existingJobId !== jobId) {
+    reverseMap.delete(existingJobId);
+  }
+
+  const existingRequestId = reverseMap.get(jobId);
+  if (existingRequestId !== undefined && existingRequestId !== normalizedId) {
+    map.delete(existingRequestId);
+  }
+
+  map.set(normalizedId, jobId);
+  reverseMap.set(jobId, normalizedId);
 }
 
 export function unregisterRequest(requestId: string | number): void {
-  map.delete(normalise(requestId));
+  const normalizedId = normalise(requestId);
+  const jobId = map.get(normalizedId);
+  if (jobId !== undefined) {
+    reverseMap.delete(jobId);
+  }
+  map.delete(normalizedId);
 }
 
 export function unregisterByJobId(jobId: string): void {
-  for (const [requestId, id] of map.entries()) {
-    if (id === jobId) {
-      map.delete(requestId);
-    }
+  const requestId = reverseMap.get(jobId);
+  if (requestId !== undefined) {
+    map.delete(requestId);
+    reverseMap.delete(jobId);
   }
 }
 
@@ -40,4 +58,5 @@ export function getJobByRequestId(requestId: string | number): string | undefine
 /** @internal For test isolation only. */
 export function clearMap(): void {
   map.clear();
+  reverseMap.clear();
 }

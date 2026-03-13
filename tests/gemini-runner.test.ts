@@ -766,6 +766,28 @@ describe("expandFileRefs", () => {
     }
   });
 
+  it("resolves multiple @file refs and preserves section order", async () => {
+    const dir = await makeTmpDir({
+      "a.ts": "A",
+      "b.ts": "B",
+      "c.ts": "C",
+      "d.ts": "D",
+    });
+    try {
+      const result = await expandFileRefs("Review @a.ts @b.ts @c.ts @d.ts", dir);
+      const aPos = result.indexOf("Content from @a.ts:\nA");
+      const bPos = result.indexOf("Content from @b.ts:\nB");
+      const cPos = result.indexOf("Content from @c.ts:\nC");
+      const dPos = result.indexOf("Content from @d.ts:\nD");
+      expect(aPos).toBeGreaterThan(-1);
+      expect(bPos).toBeGreaterThan(aPos);
+      expect(cPos).toBeGreaterThan(bPos);
+      expect(dPos).toBeGreaterThan(cPos);
+    } finally {
+      await fs.rm(dir, { recursive: true });
+    }
+  });
+
   it("expands a glob pattern (@src/**/*.ts) — all matched files inlined", async () => {
     const dir = await makeTmpDir({
       "src/x.ts": "const x = 1;",
