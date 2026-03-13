@@ -13,6 +13,9 @@ npm-debug.log*
 # Claude Code project-local state (settings, subagent memory — not team-shared)
 .claude/
 
+# Serena (semantic code navigation tool — local IDE state, not team-shared)
+.serena/
+
 # Scratch/temp files — put one-off experiments here, never in the repo root
 scratch/
 
