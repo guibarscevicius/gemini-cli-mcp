@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { sessionStore } from "../session-store.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
@@ -139,8 +139,9 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
   return { jobId, pollIntervalMs: 2000 };
 }
 
-export const geminiReplyToolDefinition = {
-  name: "gemini-reply" as const,
+export const geminiReplyToolDefinition: Tool = {
+  name: "gemini-reply",
+  title: "Continue Gemini Session",
   description:
     "Continue an existing Gemini conversation. If the MCP client supports progress notifications (progressToken present), blocks and streams partial responses as notifications/progress events, then returns the final response inline. Otherwise returns immediately with { jobId }; poll with gemini-poll. Throws if the session has a pending job.",
   inputSchema: {
@@ -181,5 +182,12 @@ export const geminiReplyToolDefinition = {
       },
     },
     required: ["sessionId", "prompt"],
+  },
+  annotations: {
+    title: "Continue Gemini Session",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
   },
 };

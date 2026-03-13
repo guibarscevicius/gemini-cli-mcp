@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import * as jobStore from "../job-store.js";
 
 export const GeminiPollSchema = z.object({
@@ -37,8 +37,9 @@ export async function geminiPoll(input: unknown): Promise<GeminiPollOutput> {
   }
 }
 
-export const geminiPollToolDefinition = {
-  name: "gemini-poll" as const,
+export const geminiPollToolDefinition: Tool = {
+  name: "gemini-poll",
+  title: "Poll Gemini Job",
   description:
     "Poll the status of an async Gemini job started by ask-gemini or gemini-reply. Returns status, partial response (while pending), or the full response (when done). Recommended poll interval: 2000ms. Jobs typically complete in 16–20s.",
   inputSchema: {
@@ -50,5 +51,12 @@ export const geminiPollToolDefinition = {
       },
     },
     required: ["jobId"],
+  },
+  annotations: {
+    title: "Poll Gemini Job",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
   },
 };
