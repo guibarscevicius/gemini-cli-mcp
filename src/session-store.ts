@@ -6,9 +6,9 @@ import { mkdirSync } from "node:fs";
 export const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
 const GC_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
-type TurnRole = "user" | "assistant";
+export type TurnRole = "user" | "assistant";
 
-interface Turn {
+export interface Turn {
   role: TurnRole;
   content: string;
 }
@@ -84,6 +84,13 @@ export class SessionStore {
     if (!row) return false;
     this.stmtTouch.run(Date.now(), id);
     return true;
+  }
+
+  getTurns(id: string): Turn[] | undefined {
+    const row = this.stmtGetTurns.get(id) as { turns: string } | undefined;
+    if (!row) return undefined;
+    this.stmtTouch.run(Date.now(), id);
+    return JSON.parse(row.turns) as Turn[];
   }
 
   appendTurn(id: string, role: TurnRole, content: string): void {
