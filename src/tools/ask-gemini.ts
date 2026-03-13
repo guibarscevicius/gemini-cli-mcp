@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { sessionStore } from "../session-store.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
@@ -126,8 +126,9 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
   return { jobId, sessionId, pollIntervalMs: 2000 };
 }
 
-export const askGeminiToolDefinition = {
-  name: "ask-gemini" as const,
+export const askGeminiToolDefinition: Tool = {
+  name: "ask-gemini",
+  title: "Ask Gemini",
   description:
     "Start a new conversation with Gemini. If the MCP client supports progress notifications (progressToken present), blocks and streams partial responses as notifications/progress events, then returns the final response inline. Otherwise returns immediately with { jobId, sessionId }; poll with gemini-poll or cancel with gemini-cancel.",
   inputSchema: {
@@ -164,5 +165,12 @@ export const askGeminiToolDefinition = {
       },
     },
     required: ["prompt"],
+  },
+  annotations: {
+    title: "Ask Gemini",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
   },
 };

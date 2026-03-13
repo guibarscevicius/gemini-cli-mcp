@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import * as jobStore from "../job-store.js";
 import { unregisterByJobId } from "../request-map.js";
 
@@ -32,8 +32,9 @@ export async function geminiCancel(input: unknown): Promise<GeminiCancelOutput> 
   return { cancelled: true, alreadyDone: false };
 }
 
-export const geminiCancelToolDefinition = {
-  name: "gemini-cancel" as const,
+export const geminiCancelToolDefinition: Tool = {
+  name: "gemini-cancel",
+  title: "Cancel Gemini Job",
   description:
     "Cancel an in-flight Gemini job. Sends SIGTERM to the subprocess. Idempotent: if the job is already done, returns { cancelled: false, alreadyDone: true }.",
   inputSchema: {
@@ -45,5 +46,12 @@ export const geminiCancelToolDefinition = {
       },
     },
     required: ["jobId"],
+  },
+  annotations: {
+    title: "Cancel Gemini Job",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
   },
 };
