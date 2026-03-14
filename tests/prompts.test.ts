@@ -110,6 +110,17 @@ describe("getPrompt — code-review", () => {
     expect(text).toContain("@src/b.ts");
   });
 
+  it("filters empty strings from files with leading/trailing whitespace", () => {
+    const result = getPrompt("code-review", {
+      files: " src/a.ts  src/b.ts ",
+      cwd: "/app",
+    });
+    const text = result.messages[0].content.text;
+    expect(text).toContain("@src/a.ts");
+    expect(text).toContain("@src/b.ts");
+    expect(text).not.toContain("@ ");
+  });
+
   it("throws McpError for invalid focus value", () => {
     expect(() =>
       getPrompt("code-review", {
@@ -159,6 +170,14 @@ describe("getPrompt — architecture-analysis", () => {
       cwd: "/app",
     });
     expect(result.messages[0].content.text).not.toContain("Specifically answer:");
+  });
+
+  it("throws McpError when 'directory' is missing", () => {
+    expect(() => getPrompt("architecture-analysis", { cwd: "/app" })).toThrow(McpError);
+  });
+
+  it("throws McpError when 'cwd' is missing", () => {
+    expect(() => getPrompt("architecture-analysis", { directory: "src/" })).toThrow(McpError);
   });
 });
 
@@ -210,6 +229,14 @@ describe("getPrompt — explain-code", () => {
       })
     ).toThrow(McpError);
   });
+
+  it("throws McpError when 'file' is missing", () => {
+    expect(() => getPrompt("explain-code", { cwd: "/app" })).toThrow(McpError);
+  });
+
+  it("throws McpError when 'cwd' is missing", () => {
+    expect(() => getPrompt("explain-code", { file: "src/auth.ts" })).toThrow(McpError);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -254,6 +281,21 @@ describe("getPrompt — debug-error", () => {
     expect(result.messages[0].content.text).toContain(
       "Additional context: This happens after login on slow networks."
     );
+  });
+
+  it("throws McpError when 'error' is missing", () => {
+    expect(() => getPrompt("debug-error", {})).toThrow(McpError);
+  });
+
+  it("filters empty strings from files with leading/trailing whitespace", () => {
+    const result = getPrompt("debug-error", {
+      error: "ReferenceError: x is not defined",
+      files: " src/a.ts  src/b.ts ",
+    });
+    const text = result.messages[0].content.text;
+    expect(text).toContain("@src/a.ts");
+    expect(text).toContain("@src/b.ts");
+    expect(text).not.toContain("@ ");
   });
 });
 

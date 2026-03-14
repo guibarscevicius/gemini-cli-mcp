@@ -180,7 +180,7 @@ function buildCodeReview(args: Record<string, string> | undefined): PromptResult
       ? "all issue types (security, performance, correctness, and design)"
       : `${focus} issues`;
 
-  const fileRefs = files.split(/\s+/).map((f) => `@${f}`).join(" ");
+  const fileRefs = files.split(/\s+/).filter(Boolean).map((f) => `@${f}`).join(" ");
 
   const text =
     `<!-- working directory: ${cwd} -->\n` +
@@ -241,7 +241,7 @@ function buildDebugError(args: Record<string, string> | undefined): PromptResult
     `Help me debug the following error:\n\n` +
     `\`\`\`\n${error}\n\`\`\`` +
     (files
-      ? `\n\nRelevant source files:\n${files.split(/\s+/).map((f) => `@${f}`).join(" ")}`
+      ? `\n\nRelevant source files:\n${files.split(/\s+/).filter(Boolean).map((f) => `@${f}`).join(" ")}`
       : "") +
     (context ? `\n\nAdditional context: ${context}` : "");
 
