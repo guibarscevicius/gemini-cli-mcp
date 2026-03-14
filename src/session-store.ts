@@ -6,9 +6,9 @@ import { mkdirSync } from "node:fs";
 export const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
 const GC_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
-type TurnRole = "user" | "assistant";
+export type TurnRole = "user" | "assistant";
 
-interface Turn {
+export interface Turn {
   role: TurnRole;
   content: string;
 }
@@ -84,6 +84,27 @@ export class SessionStore {
     if (!row) return false;
     this.stmtTouch.run(Date.now(), id);
     return true;
+  }
+
+  getTurns(id: string): Turn[] | undefined {
+    const row = this.stmtGetTurns.get(id) as { turns: string } | undefined;
+    if (!row) return undefined;
+    try {
+      this.stmtTouch.run(Date.now(), id);
+    } catch (err) {
+      // Touch failure is non-fatal: TTL accuracy is less important than returning data.
+      process.stderr.write(
+        `[gemini-cli-mcp] getTurns: failed to touch session ${id}: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+    try {
+      return JSON.parse(row.turns) as Turn[];
+    } catch (err) {
+      process.stderr.write(
+        `[gemini-cli-mcp] getTurns: session ${id} has corrupt turn data: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      throw new Error(`Session ${id} has corrupt turn data and cannot be exported`);
+    }
   }
 
   appendTurn(id: string, role: TurnRole, content: string): void {

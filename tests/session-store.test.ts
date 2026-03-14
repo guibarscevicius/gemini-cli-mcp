@@ -145,6 +145,53 @@ describe("SessionStore", () => {
     }
   });
 
+  describe("getTurns()", () => {
+    it("returns undefined for a session that does not exist", () => {
+      expect(store.getTurns("no-such-session")).toBeUndefined();
+    });
+
+    it("returns an empty array for a freshly created session with no turns", () => {
+      const id = "empty-session";
+      store.create(id);
+      expect(store.getTurns(id)).toEqual([]);
+    });
+
+    it("returns turns in insertion order after appendTurn calls", () => {
+      const id = "turns-order";
+      store.create(id);
+      store.appendTurn(id, "user", "hello");
+      store.appendTurn(id, "assistant", "hi there");
+      store.appendTurn(id, "user", "how are you?");
+
+      expect(store.getTurns(id)).toEqual([
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "hi there" },
+        { role: "user", content: "how are you?" },
+      ]);
+    });
+
+    it("touching via getTurns keeps the session alive through a GC sweep", () => {
+      const ttlMs = 1_000;
+      const gcIntervalMs = 200;
+      const gcStore = new SessionStore(ttlMs, gcIntervalMs, ":memory:");
+
+      try {
+        const id = "session-touch-via-get-turns";
+        gcStore.create(id);
+
+        // Advance to just before expiry, call getTurns to refresh last_accessed
+        vi.advanceTimersByTime(ttlMs - 1);
+        expect(gcStore.getTurns(id)).toEqual([]);
+
+        // Advance past the original TTL — session should still be alive because of the touch
+        vi.advanceTimersByTime(ttlMs / 2 + gcIntervalMs + 1);
+        expect(gcStore.getTurns(id)).toEqual([]);
+      } finally {
+        gcStore.destroy();
+      }
+    });
+  });
+
   it("expired sessions are removed by GC", () => {
     const ttlMs = 1_000;
     const gcIntervalMs = 200;
