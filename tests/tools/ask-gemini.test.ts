@@ -6,6 +6,7 @@ import { ZodError } from "zod";
 vi.mock("../../src/gemini-runner.js", () => ({
   runGemini: vi.fn(),
   spawnGemini: vi.fn(),
+  countFileRefs: vi.fn(() => 0),
   SemaphoreTimeoutError: class SemaphoreTimeoutError extends Error {
     constructor(timeoutMs: number) {
       super(`Gemini request timed out after ${timeoutMs}ms waiting for a concurrency slot`);

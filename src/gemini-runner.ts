@@ -662,7 +662,7 @@ function extractFileRefs(text: string): string[] {
 }
 
 /** Count the number of @file tokens in a prompt. */
-function countFileRefs(prompt: string): number {
+export function countFileRefs(prompt: string): number {
   return extractFileRefs(prompt).length;
 }
 

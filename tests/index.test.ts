@@ -44,6 +44,10 @@ describe("index wiring", () => {
         handlers.set(schema, handler as RequestHandler);
         return this;
       },
+      getClientCapabilities() {
+        return undefined;
+      },
+      elicitInput: vi.fn(),
     } as Parameters<typeof registerToolHandlers>[0]);
   });
 
@@ -87,17 +91,18 @@ describe("index wiring", () => {
     expect(mockHandleCallTool).toHaveBeenCalledWith(
       "ask-gemini",
       args,
-      expect.objectContaining({ progressToken: undefined, requestId: undefined })
+      expect.objectContaining({ progressToken: undefined, requestId: undefined, elicit: undefined })
     );
   });
 
-  it("createServer includes logging, resources, and prompts capabilities", () => {
+  it("createServer includes logging, resources, prompts, and elicitation capabilities", () => {
     const server = createServer() as unknown as {
       _capabilities: {
         tools: Record<string, never>;
         logging: Record<string, never>;
         resources: { listChanged: boolean };
         prompts: Record<string, never>;
+        elicitation: Record<string, never>;
       };
     };
     expect(server._capabilities).toEqual({
@@ -105,6 +110,7 @@ describe("index wiring", () => {
       logging: {},
       resources: { listChanged: true },
       prompts: {},
+      elicitation: {},
     });
   });
 

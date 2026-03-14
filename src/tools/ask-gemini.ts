@@ -4,9 +4,9 @@ import { McpError, ErrorCode, type Tool } from "@modelcontextprotocol/sdk/types.
 import { sessionStore } from "../session-store.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
-import { runGeminiAsync, waitForJob, DEFAULT_WAIT_MS } from "./shared.js";
+import { runGeminiAsync, waitForJob, DEFAULT_WAIT_MS, elicitCwdIfNeeded } from "./shared.js";
 import { registerRequest, unregisterRequest } from "../request-map.js";
-import { SemaphoreTimeoutError } from "../gemini-runner.js";
+import { countFileRefs, SemaphoreTimeoutError } from "../gemini-runner.js";
 import { mcpLog } from "../logging.js";
 
 export const AskGeminiSchema = z.object({
@@ -58,6 +58,17 @@ export interface AskGeminiOutput {
  */
 export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Promise<AskGeminiOutput> {
   const { prompt, model, cwd, wait, waitTimeoutMs, expandRefs } = AskGeminiSchema.parse(input);
+  const resolvedCwd = await elicitCwdIfNeeded(prompt, cwd, ctx);
+  if (resolvedCwd === null) {
+    throw new McpError(ErrorCode.InvalidParams, "cwd is required for @file expansion — cancelled by user");
+  }
+  if (resolvedCwd === undefined && countFileRefs(prompt) >= 2) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      "cwd is required when prompt contains multiple @file references. Provide cwd or use an MCP client that supports elicitation."
+    );
+  }
+  const effectiveCwd = resolvedCwd ?? cwd;
 
   const sessionId = randomUUID();
   const jobId = randomUUID();
@@ -71,7 +82,7 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
 
   // Background job — fire-and-forget in async mode, raced via job.completion in wait/streaming mode.
   // This .then/.catch chain always owns request-map cleanup.
-  runGeminiAsync(jobId, prompt, { model, cwd, tool: "ask-gemini", expandRefs }, ctx)
+  runGeminiAsync(jobId, prompt, { model, cwd: effectiveCwd, tool: "ask-gemini", expandRefs }, ctx)
     .then((response) => {
       jobStore.completeJob(jobId, response);
       try {

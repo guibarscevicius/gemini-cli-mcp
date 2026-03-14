@@ -1,6 +1,7 @@
-import { runGemini, spawnGemini, type GeminiExecutor } from "../gemini-runner.js";
+import { countFileRefs, runGemini, spawnGemini, type GeminiExecutor } from "../gemini-runner.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
+import type { ElicitRequestFormParams } from "@modelcontextprotocol/sdk/types.js";
 import { mcpLog } from "../logging.js";
 
 /**
@@ -108,4 +109,35 @@ export async function waitForJob(
   } finally {
     if (timerId !== undefined) clearTimeout(timerId);
   }
+}
+
+export async function elicitCwdIfNeeded(
+  prompt: string,
+  cwd: string | undefined,
+  ctx: ToolCallContext
+): Promise<string | undefined | null> {
+  if (cwd || countFileRefs(prompt) < 2) return cwd;
+  if (!ctx.elicit) return undefined;
+
+  const params: ElicitRequestFormParams = {
+    message: "The prompt contains multiple @file references but no working directory was provided.",
+    requestedSchema: {
+      type: "object",
+      properties: {
+        cwd: {
+          type: "string",
+          title: "Working directory",
+          description:
+            "Absolute path to the project root so Gemini can resolve @file paths (e.g. /home/user/myproject)",
+        },
+      },
+      required: ["cwd"],
+    },
+  };
+
+  const result = await ctx.elicit(params);
+  if (result.action === "accept" && typeof result.content?.cwd === "string") {
+    return result.content.cwd;
+  }
+  return null;
 }

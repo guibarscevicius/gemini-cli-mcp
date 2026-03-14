@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import { McpError, ErrorCode, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
-import { runGeminiAsync, waitForJob, DEFAULT_WAIT_MS } from "./shared.js";
+import { runGeminiAsync, waitForJob, DEFAULT_WAIT_MS, elicitCwdIfNeeded } from "./shared.js";
 import { registerRequest, unregisterRequest } from "../request-map.js";
-import { SemaphoreTimeoutError } from "../gemini-runner.js";
+import { countFileRefs, SemaphoreTimeoutError } from "../gemini-runner.js";
 import { mcpLog } from "../logging.js";
 
 export const GeminiResearchSchema = z.object({
@@ -63,6 +63,17 @@ export async function geminiResearch(
   ctx: ToolCallContext = {}
 ): Promise<GeminiResearchOutput> {
   const { query, depth, model, cwd, expandRefs, wait, waitTimeoutMs } = GeminiResearchSchema.parse(input);
+  const resolvedCwd = await elicitCwdIfNeeded(query, cwd, ctx);
+  if (resolvedCwd === null) {
+    throw new McpError(ErrorCode.InvalidParams, "cwd is required for @file expansion — cancelled by user");
+  }
+  if (resolvedCwd === undefined && countFileRefs(query) >= 2) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      "cwd is required when prompt contains multiple @file references. Provide cwd or use an MCP client that supports elicitation."
+    );
+  }
+  const effectiveCwd = resolvedCwd ?? cwd;
 
   const jobId = randomUUID();
   jobStore.createJob(jobId);
@@ -72,7 +83,7 @@ export async function geminiResearch(
 
   const fullPrompt = DEPTH_PREAMBLES[depth] + query;
 
-  runGeminiAsync(jobId, fullPrompt, { model, cwd, tool: "gemini-research", expandRefs }, ctx)
+  runGeminiAsync(jobId, fullPrompt, { model, cwd: effectiveCwd, tool: "gemini-research", expandRefs }, ctx)
     .then((response) => {
       jobStore.completeJob(jobId, response);
       if (ctx.requestId !== undefined) {

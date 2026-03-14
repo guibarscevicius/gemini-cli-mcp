@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import * as jobStore from "../job-store.js";
-import { runGeminiAsync } from "./shared.js";
+import type { ToolCallContext } from "../dispatcher.js";
+import { countFileRefs } from "../gemini-runner.js";
+import { runGeminiAsync, elicitCwdIfNeeded } from "./shared.js";
 
 export const GeminiBatchSchema = z.object({
   prompts: z
@@ -64,9 +66,24 @@ export type GeminiBatchOutput = GeminiBatchSyncOutput | GeminiBatchAsyncOutput;
  *
  * Async mode (wait: false): returns job IDs immediately; use gemini-poll per item.
  */
-export async function geminiBatch(input: unknown): Promise<GeminiBatchOutput> {
+export async function geminiBatch(input: unknown, ctx: ToolCallContext = {}): Promise<GeminiBatchOutput> {
   const { prompts, model, cwd, expandRefs, wait } = GeminiBatchSchema.parse(input);
   const startMs = Date.now();
+  const firstPromptNeedingCwd = prompts.find((prompt) => countFileRefs(prompt) >= 2);
+  let effectiveCwd = cwd;
+  if (firstPromptNeedingCwd !== undefined) {
+    const resolvedCwd = await elicitCwdIfNeeded(firstPromptNeedingCwd, cwd, ctx);
+    if (resolvedCwd === null) {
+      throw new McpError(ErrorCode.InvalidParams, "cwd is required for @file expansion — cancelled by user");
+    }
+    if (resolvedCwd === undefined) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        "cwd is required when prompt contains multiple @file references. Provide cwd or use an MCP client that supports elicitation."
+      );
+    }
+    effectiveCwd = resolvedCwd ?? cwd;
+  }
 
   const items = prompts.map((prompt, index) => ({
     index,
@@ -81,7 +98,7 @@ export async function geminiBatch(input: unknown): Promise<GeminiBatchOutput> {
   // post-hoc via gemini-cancel using the jobId returned in async mode.
   for (const { jobId, prompt } of items) {
     jobStore.createJob(jobId);
-    runGeminiAsync(jobId, prompt, { model, cwd, tool: "gemini-batch", expandRefs }, {})
+    runGeminiAsync(jobId, prompt, { model, cwd: effectiveCwd, tool: "gemini-batch", expandRefs }, {})
       .then((response) => {
         jobStore.completeJob(jobId, response);
       })

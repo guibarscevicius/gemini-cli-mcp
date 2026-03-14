@@ -37,7 +37,7 @@ import { sessionStore } from "./session-store.js";
 const _require = createRequire(import.meta.url);
 const { version: pkgVersion } = _require("../package.json") as { version: string };
 
-type ToolServer = Pick<Server, "setRequestHandler">;
+type ToolServer = Pick<Server, "setRequestHandler" | "getClientCapabilities" | "elicitInput">;
 
 export function registerToolHandlers(server: ToolServer): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -57,19 +57,31 @@ export function registerToolHandlers(server: ToolServer): void {
     const { name, arguments: args } = request.params;
     const progressToken = request.params._meta?.progressToken;
     const requestId = extra?.requestId as string | number | undefined;
+    const clientCaps = server.getClientCapabilities();
     const ctx = {
       sendNotification: extra?.sendNotification as ((n: unknown) => Promise<void>) | undefined,
       progressToken,
       requestId,
+      elicit: clientCaps?.elicitation
+        ? (params: Parameters<Server["elicitInput"]>[0]) => server.elicitInput(params)
+        : undefined,
     };
     return handleCallTool(name, args, ctx);
   });
 }
 
 export function createServer(): Server {
+  const capabilities = {
+    tools: {},
+    logging: {},
+    resources: { listChanged: true },
+    prompts: {},
+    elicitation: {},
+  } as unknown as NonNullable<ConstructorParameters<typeof Server>[1]>["capabilities"];
+
   const server = new Server(
     { name: "gemini-cli-mcp", version: pkgVersion },
-    { capabilities: { tools: {}, logging: {}, resources: { listChanged: true }, prompts: {} } }
+    { capabilities }
   );
   initMcpLogger(server);
 

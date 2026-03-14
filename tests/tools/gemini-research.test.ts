@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 vi.mock("../../src/gemini-runner.js", () => ({
   runGemini: vi.fn(),
   spawnGemini: vi.fn(),
+  countFileRefs: vi.fn(() => 0),
   SemaphoreTimeoutError: class SemaphoreTimeoutError extends Error {
     constructor(timeoutMs: number) {
       super(`Gemini request timed out after ${timeoutMs}ms waiting for a concurrency slot`);
@@ -32,10 +33,11 @@ vi.mock("../../src/request-map.js", () => ({
 vi.mock("../../src/tools/shared.js", () => ({
   runGeminiAsync: vi.fn(),
   waitForJob: vi.fn(),
+  elicitCwdIfNeeded: vi.fn(),
   DEFAULT_WAIT_MS: 90_000,
 }));
 
-import { runGeminiAsync, waitForJob } from "../../src/tools/shared.js";
+import { runGeminiAsync, waitForJob, elicitCwdIfNeeded } from "../../src/tools/shared.js";
 import {
   geminiResearch,
   geminiResearchToolDefinition,
@@ -43,9 +45,11 @@ import {
 
 const mockRunGeminiAsync = vi.mocked(runGeminiAsync);
 const mockWaitForJob = vi.mocked(waitForJob);
+const mockElicitCwdIfNeeded = vi.mocked(elicitCwdIfNeeded);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockElicitCwdIfNeeded.mockImplementation(async (_prompt, cwd) => cwd);
   mockRunGeminiAsync.mockResolvedValue("research response");
   mockWaitForJob.mockResolvedValue({ response: "final response" });
 });
