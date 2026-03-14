@@ -103,6 +103,13 @@ describe("readResource", () => {
     expect(result.contents[0].mimeType).toBe("application/json");
   });
 
+  it("gemini://server/health binary.path is null when GEMINI_BINARY is the default fallback", () => {
+    // runnerMock.GEMINI_BINARY is "gemini" (set in vi.hoisted above)
+    const result = readResource("gemini://server/health");
+    const data = parseContents(result) as Record<string, unknown>;
+    expect((data.binary as Record<string, unknown>).path).toBeNull();
+  });
+
   // --- sessions list ---
   it("gemini://sessions returns sessions list", () => {
     sessionStoreMock.listSessions.mockReturnValue([
@@ -115,6 +122,14 @@ describe("readResource", () => {
     expect((data.sessions[0] as Record<string, unknown>).id).toBe("s1");
   });
 
+  it("gemini://sessions returns empty array when no sessions exist", () => {
+    sessionStoreMock.listSessions.mockReturnValue([]);
+    const result = readResource("gemini://sessions");
+    const data = parseContents(result) as { sessions: unknown[] };
+    expect(Array.isArray(data.sessions)).toBe(true);
+    expect(data.sessions).toHaveLength(0);
+  });
+
   // --- jobs list ---
   it("gemini://jobs returns only pending jobs", () => {
     jobStoreMock.listActiveJobs.mockReturnValue([
@@ -124,6 +139,14 @@ describe("readResource", () => {
     const data = parseContents(result) as { jobs: unknown[] };
     expect(data.jobs).toHaveLength(1);
     expect((data.jobs[0] as Record<string, unknown>).id).toBe("j1");
+  });
+
+  it("gemini://jobs returns empty array when no jobs are pending", () => {
+    jobStoreMock.listActiveJobs.mockReturnValue([]);
+    const result = readResource("gemini://jobs");
+    const data = parseContents(result) as { jobs: unknown[] };
+    expect(Array.isArray(data.jobs)).toBe(true);
+    expect(data.jobs).toHaveLength(0);
   });
 
   // --- session detail ---
@@ -191,5 +214,16 @@ describe("readResource", () => {
     expect(() => readResource("gemini://unknown/resource")).toThrow(
       expect.objectContaining({ code: ErrorCode.InvalidParams })
     );
+  });
+
+  // --- multi-segment URI rejection ---
+  it("gemini://sessions/a/b/c is rejected as unknown (not passed to session lookup)", () => {
+    expect(() => readResource("gemini://sessions/a/b/c")).toThrow(McpError);
+    expect(sessionStoreMock.getSessionMeta).not.toHaveBeenCalled();
+  });
+
+  it("gemini://jobs/a/b/c is rejected as unknown (not passed to job lookup)", () => {
+    expect(() => readResource("gemini://jobs/a/b/c")).toThrow(McpError);
+    expect(jobStoreMock.getJob).not.toHaveBeenCalled();
   });
 });

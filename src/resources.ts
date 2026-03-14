@@ -24,8 +24,8 @@ export const STATIC_RESOURCES: Resource[] = [
   },
   {
     uri: "gemini://jobs",
-    name: "Active Jobs",
-    description: "All currently pending (active) jobs with id and createdAt timestamp.",
+    name: "Pending Jobs",
+    description: "All currently pending jobs with id and createdAt timestamp.",
     mimeType: "application/json",
   },
 ];
@@ -124,8 +124,8 @@ function readJob(uri: string, jobId: string): ReadResourceResult {
   return toJson(uri, data);
 }
 
-const SESSION_RE = /^gemini:\/\/sessions\/(.+)$/;
-const JOB_RE = /^gemini:\/\/jobs\/(.+)$/;
+const SESSION_RE = /^gemini:\/\/sessions\/([^/]+)$/;
+const JOB_RE = /^gemini:\/\/jobs\/([^/]+)$/;
 
 export function readResource(uri: string): ReadResourceResult {
   if (uri === "gemini://server/health") return readHealth(uri);

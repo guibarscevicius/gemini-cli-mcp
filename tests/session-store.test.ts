@@ -208,3 +208,91 @@ describe("SessionStore", () => {
     }
   });
 });
+
+describe("setListChangedCallback", () => {
+  let s: SessionStore;
+  beforeEach(() => { vi.useFakeTimers(); s = new SessionStore(SESSION_TTL_MS, undefined, ":memory:"); });
+  afterEach(() => { s.destroy(); vi.useRealTimers(); });
+
+  it("fires the callback when a session is created", () => {
+    const cb = vi.fn();
+    s.setListChangedCallback(cb);
+    s.create("cb-session-1");
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire the callback before it is set", () => {
+    const cb = vi.fn();
+    s.create("cb-session-before");
+    s.setListChangedCallback(cb);
+    expect(cb).not.toHaveBeenCalled();
+  });
+});
+
+describe("listSessions", () => {
+  let s: SessionStore;
+  beforeEach(() => { vi.useFakeTimers(); s = new SessionStore(SESSION_TTL_MS, undefined, ":memory:"); });
+  afterEach(() => { s.destroy(); vi.useRealTimers(); });
+
+  it("returns empty array when no sessions exist", () => {
+    expect(s.listSessions()).toEqual([]);
+  });
+
+  it("returns all sessions with id, lastAccessed, and turnCount", () => {
+    s.create("ls-a");
+    s.appendTurn("ls-a", "user", "hello");
+    s.appendTurn("ls-a", "assistant", "world");
+    s.create("ls-b");
+
+    const sessions = s.listSessions();
+    expect(sessions).toHaveLength(2);
+
+    const a = sessions.find(r => r.id === "ls-a")!;
+    expect(a.turnCount).toBe(2);
+    expect(typeof a.lastAccessed).toBe("number");
+
+    const b = sessions.find(r => r.id === "ls-b")!;
+    expect(b.turnCount).toBe(0);
+  });
+
+  it("returns sessions ordered by last_accessed DESC", () => {
+    s.create("ls-old");
+    vi.advanceTimersByTime(100);
+    s.create("ls-new");
+
+    const sessions = s.listSessions();
+    expect(sessions[0].id).toBe("ls-new");
+    expect(sessions[1].id).toBe("ls-old");
+  });
+});
+
+describe("getSessionMeta", () => {
+  let s: SessionStore;
+  beforeEach(() => { vi.useFakeTimers(); s = new SessionStore(SESSION_TTL_MS, undefined, ":memory:"); });
+  afterEach(() => { s.destroy(); vi.useRealTimers(); });
+
+  it("returns undefined for unknown session", () => {
+    expect(s.getSessionMeta("no-such-id")).toBeUndefined();
+  });
+
+  it("returns lastAccessed and turns for a known session", () => {
+    s.create("meta-s");
+    s.appendTurn("meta-s", "user", "q");
+    s.appendTurn("meta-s", "assistant", "a");
+
+    const meta = s.getSessionMeta("meta-s");
+    expect(meta).toBeDefined();
+    expect(typeof meta!.lastAccessed).toBe("number");
+    expect(meta!.turns).toHaveLength(2);
+    expect(meta!.turns[0].role).toBe("user");
+    expect(meta!.turns[1].role).toBe("assistant");
+  });
+
+  it("does NOT update last_accessed (no side effect)", () => {
+    s.create("meta-touch-test");
+    const before = s.getSessionMeta("meta-touch-test")!.lastAccessed;
+    vi.advanceTimersByTime(500);
+    const after = s.getSessionMeta("meta-touch-test")!.lastAccessed;
+    expect(after).toBe(before);
+  });
+});
