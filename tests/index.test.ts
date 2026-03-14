@@ -87,18 +87,20 @@ describe("index wiring", () => {
     );
   });
 
-  it("createServer includes logging and resources capabilities", () => {
+  it("createServer includes logging, resources, and prompts capabilities", () => {
     const server = createServer() as unknown as {
       _capabilities: {
         tools: Record<string, never>;
         logging: Record<string, never>;
         resources: { listChanged: boolean };
+        prompts: Record<string, never>;
       };
     };
     expect(server._capabilities).toEqual({
       tools: {},
       logging: {},
       resources: { listChanged: true },
+      prompts: {},
     });
   });
 
@@ -110,6 +112,15 @@ describe("index wiring", () => {
     expect(rh.has("resources/list")).toBe(true);
     expect(rh.has("resources/templates/list")).toBe(true);
     expect(rh.has("resources/read")).toBe(true);
+  });
+
+  it("createServer registers ListPrompts and GetPrompt handlers", () => {
+    const server = createServer() as unknown as {
+      _requestHandlers: Map<string, unknown>;
+    };
+    const rh = server._requestHandlers;
+    expect(rh.has("prompts/list")).toBe(true);
+    expect(rh.has("prompts/get")).toBe(true);
   });
 
   it("ListResources handler returns STATIC_RESOURCES", async () => {

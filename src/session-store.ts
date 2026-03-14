@@ -61,7 +61,7 @@ export class SessionStore {
     this.stmtGcDelete = this.db.prepare("DELETE FROM sessions WHERE last_accessed < ?");
     this.stmtCount = this.db.prepare("SELECT COUNT(*) as n FROM sessions");
     this.stmtListSessions = this.db.prepare(
-      "SELECT id, last_accessed, turns FROM sessions ORDER BY last_accessed DESC"
+      "SELECT id, last_accessed, json_array_length(turns) as turn_count FROM sessions ORDER BY last_accessed DESC"
     );
     this.stmtGetMeta = this.db.prepare(
       "SELECT last_accessed, turns FROM sessions WHERE id = ?"
@@ -183,19 +183,26 @@ export class SessionStore {
 
   listSessions(): Array<{ id: string; lastAccessed: number; turnCount: number }> {
     const rows = this.stmtListSessions.all() as {
-      id: string; last_accessed: number; turns: string;
+      id: string; last_accessed: number; turn_count: number;
     }[];
     return rows.map(row => ({
       id: row.id,
       lastAccessed: row.last_accessed,
-      turnCount: (JSON.parse(row.turns) as Turn[]).length,
+      turnCount: row.turn_count,
     }));
   }
 
   getSessionMeta(id: string): { lastAccessed: number; turns: Turn[] } | undefined {
     const row = this.stmtGetMeta.get(id) as { last_accessed: number; turns: string } | undefined;
     if (!row) return undefined;
-    return { lastAccessed: row.last_accessed, turns: JSON.parse(row.turns) as Turn[] };
+    try {
+      return { lastAccessed: row.last_accessed, turns: JSON.parse(row.turns) as Turn[] };
+    } catch (err) {
+      process.stderr.write(
+        `[gemini-cli-mcp] getSessionMeta: session ${id} has corrupt turn data: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      throw new Error(`Session ${id} has corrupt turn data`);
+    }
   }
 
   destroy(): void {

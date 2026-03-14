@@ -215,3 +215,69 @@ describe("clearJobs", () => {
     expect(getJob("b")).toBeUndefined();
   });
 });
+
+describe("listActiveJobs", () => {
+  it("returns empty array when no jobs exist", async () => {
+    const { listActiveJobs } = await import("../src/job-store.js");
+    expect(listActiveJobs()).toEqual([]);
+  });
+
+  it("returns only pending jobs with id and createdAt", async () => {
+    const { listActiveJobs } = await import("../src/job-store.js");
+    createJob("active-1");
+    createJob("active-2");
+    completeJob("active-2", "done");
+    createJob("active-3");
+    failJob("active-3", "oops");
+
+    const active = listActiveJobs();
+    expect(active).toHaveLength(1);
+    expect(active[0].id).toBe("active-1");
+    expect(typeof active[0].createdAt).toBe("number");
+  });
+
+  it("returns no jobs after all are cancelled or completed", async () => {
+    const { listActiveJobs } = await import("../src/job-store.js");
+    createJob("done-1");
+    createJob("done-2");
+    completeJob("done-1", "ok");
+    cancelJob("done-2");
+    expect(listActiveJobs()).toEqual([]);
+  });
+});
+
+describe("setJobListChangedCallback", () => {
+  it("fires on createJob, completeJob, failJob, cancelJob", async () => {
+    const { listActiveJobs, setJobListChangedCallback, _resetJobListChangedCallback } =
+      await import("../src/job-store.js");
+    void listActiveJobs; // referenced to avoid lint
+    const cb = vi.fn();
+    setJobListChangedCallback(cb);
+    try {
+      createJob("cb-1");
+      expect(cb).toHaveBeenCalledTimes(1);
+      completeJob("cb-1", "done");
+      expect(cb).toHaveBeenCalledTimes(2);
+
+      createJob("cb-2");
+      failJob("cb-2", "err");
+      expect(cb).toHaveBeenCalledTimes(4);
+
+      createJob("cb-3");
+      cancelJob("cb-3");
+      expect(cb).toHaveBeenCalledTimes(6);
+    } finally {
+      _resetJobListChangedCallback();
+    }
+  });
+
+  it("does not fire after _resetJobListChangedCallback", async () => {
+    const { setJobListChangedCallback, _resetJobListChangedCallback } =
+      await import("../src/job-store.js");
+    const cb = vi.fn();
+    setJobListChangedCallback(cb);
+    _resetJobListChangedCallback();
+    createJob("cb-reset");
+    expect(cb).not.toHaveBeenCalled();
+  });
+});
