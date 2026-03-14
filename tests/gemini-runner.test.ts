@@ -302,12 +302,12 @@ describe("runGemini", () => {
     expect(capturedOpts.cwd).toBeUndefined();
   });
 
-  it("passes 300-second timeout to executor", async () => {
+  it("passes default 1200-second timeout to executor", async () => {
     const exec = makeExecutor("ok");
     await runGemini("hello", {}, exec);
 
     const capturedOpts = vi.mocked(exec).mock.calls[0][1];
-    expect(capturedOpts.timeout).toBe(300_000);
+    expect(capturedOpts.timeout).toBe(1_200_000);
   });
 
   it("passes prompt inline when it fits below LARGE_PROMPT_THRESHOLD", async () => {

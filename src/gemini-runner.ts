@@ -23,8 +23,9 @@ export class SemaphoreTimeoutError extends Error {
   }
 }
 
-// 300 s - allows Gemini 2.5 Pro deep-reasoning tasks (can take 2–3 min before first token)
-const TIMEOUT_MS = 300_000;
+// Configurable via GEMINI_SUBPROCESS_TIMEOUT_MS (default 1200 s / 20 min).
+// Complex code review tasks with tool calls routinely take 5–15 min.
+const TIMEOUT_MS = parseInt(process.env.GEMINI_SUBPROCESS_TIMEOUT_MS ?? "1200000", 10);
 
 // Linux MAX_ARG_STRLEN = PAGE_SIZE × 32 = 131,072 bytes (~128 KB) caps any single exec arg.
 // Prompts larger than this threshold are written to a temp file and referenced via @path
@@ -395,7 +396,10 @@ export function runWithWarmProcess(
     };
 
     timeoutHandle = setTimeout(() => {
-      try { cp.kill("SIGTERM"); } catch { /* already dead */ }
+      try {
+        cp.kill("SIGTERM");
+        setTimeout(() => { try { cp.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
+      } catch { /* already dead */ }
       settle(() => reject(new Error(`Gemini warm process timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
 
@@ -519,6 +523,7 @@ export function spawnGemini(
 
   timeoutHandle = setTimeout(() => {
     cp.kill("SIGTERM");
+    setTimeout(() => { try { cp.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
     settle(() =>
       onError(new Error(`Gemini subprocess timed out after ${spawnOpts.timeout}ms`))
     );
