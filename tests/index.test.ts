@@ -11,6 +11,7 @@ vi.mock("../src/dispatcher.js", () => ({
 import { handleCallTool } from "../src/dispatcher.js";
 import { createServer, registerToolHandlers } from "../src/index.js";
 import { _resetMcpLogger } from "../src/logging.js";
+import { STATIC_RESOURCES, RESOURCE_TEMPLATES } from "../src/resources.js";
 import { askGeminiToolDefinition } from "../src/tools/ask-gemini.js";
 import { geminiReplyToolDefinition } from "../src/tools/gemini-reply.js";
 import { geminiPollToolDefinition } from "../src/tools/gemini-poll.js";
@@ -86,13 +87,46 @@ describe("index wiring", () => {
     );
   });
 
-  it("createServer includes logging capability", () => {
+  it("createServer includes logging and resources capabilities", () => {
     const server = createServer() as unknown as {
-      _capabilities: { tools: Record<string, never>; logging: Record<string, never> };
+      _capabilities: {
+        tools: Record<string, never>;
+        logging: Record<string, never>;
+        resources: { listChanged: boolean };
+      };
     };
     expect(server._capabilities).toEqual({
       tools: {},
       logging: {},
+      resources: { listChanged: true },
     });
+  });
+
+  it("createServer registers ListResources, ListResourceTemplates, and ReadResource handlers", async () => {
+    const server = createServer() as unknown as {
+      _requestHandlers: Map<string, unknown>;
+    };
+    const rh = server._requestHandlers;
+    expect(rh.has("resources/list")).toBe(true);
+    expect(rh.has("resources/templates/list")).toBe(true);
+    expect(rh.has("resources/read")).toBe(true);
+  });
+
+  it("ListResources handler returns STATIC_RESOURCES", async () => {
+    const server = createServer() as unknown as {
+      _requestHandlers: Map<string, (req: unknown) => Promise<unknown>>;
+    };
+    const handler = server._requestHandlers.get("resources/list")!;
+    const result = await handler({ method: "resources/list", params: {} });
+    expect(result).toEqual({ resources: STATIC_RESOURCES });
+  });
+
+  it("ListResourceTemplates handler returns RESOURCE_TEMPLATES", async () => {
+    const server = createServer() as unknown as {
+      _requestHandlers: Map<string, (req: unknown) => Promise<unknown>>;
+    };
+    const handler = server._requestHandlers.get("resources/templates/list")!;
+    const result = await handler({ method: "resources/templates/list", params: {} });
+    expect(result).toEqual({ resourceTemplates: RESOURCE_TEMPLATES });
   });
 });
