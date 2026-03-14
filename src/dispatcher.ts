@@ -14,6 +14,7 @@ import { geminiCancel } from "./tools/gemini-cancel.js";
 import { geminiHealth } from "./tools/gemini-health.js";
 import { geminiExport } from "./tools/gemini-export.js";
 import { geminiBatch } from "./tools/gemini-batch.js";
+import { geminiResearch } from "./tools/gemini-research.js";
 import { mcpLog } from "./logging.js";
 
 export interface ToolCallContext {
@@ -106,6 +107,14 @@ export async function handleCallTool(
 
         case "gemini-batch": {
           const result = await geminiBatch(args);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            structuredContent: result as unknown as Record<string, unknown>,
+          };
+        }
+
+        case "gemini-research": {
+          const result = await geminiResearch(args, ctx);
           return {
             content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
             structuredContent: result as unknown as Record<string, unknown>,
