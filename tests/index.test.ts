@@ -87,18 +87,20 @@ describe("index wiring", () => {
     );
   });
 
-  it("createServer includes logging and resources capabilities", () => {
+  it("createServer includes logging, resources, and prompts capabilities", () => {
     const server = createServer() as unknown as {
       _capabilities: {
         tools: Record<string, never>;
         logging: Record<string, never>;
         resources: { listChanged: boolean };
+        prompts: Record<string, never>;
       };
     };
     expect(server._capabilities).toEqual({
       tools: {},
       logging: {},
       resources: { listChanged: true },
+      prompts: {},
     });
   });
 

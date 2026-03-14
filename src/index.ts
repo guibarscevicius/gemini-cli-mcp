@@ -7,6 +7,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   CancelledNotificationSchema,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
   ListResourcesRequestSchema,
   ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
@@ -24,11 +26,12 @@ import { geminiExportToolDefinition } from "./tools/gemini-export.js";
 import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
-import { setJobListChangedCallback } from "./job-store.js";
 import { warmPool } from "./gemini-runner.js";
 import { initMcpLogger, setMcpLogLevel } from "./logging.js";
 import { STATIC_RESOURCES, RESOURCE_TEMPLATES, readResource } from "./resources.js";
+import { listPrompts, getPrompt } from "./prompts.js";
 import { sessionStore } from "./session-store.js";
+
 const _require = createRequire(import.meta.url);
 const { version: pkgVersion } = _require("../package.json") as { version: string };
 
@@ -62,7 +65,7 @@ export function registerToolHandlers(server: ToolServer): void {
 export function createServer(): Server {
   const server = new Server(
     { name: "gemini-cli-mcp", version: pkgVersion },
-    { capabilities: { tools: {}, logging: {}, resources: { listChanged: true } } }
+    { capabilities: { tools: {}, logging: {}, resources: { listChanged: true }, prompts: {} } }
   );
   initMcpLogger(server);
 
@@ -78,10 +81,28 @@ export function createServer(): Server {
     readResource(req.params.uri)
   );
 
+  server.setRequestHandler(ListPromptsRequestSchema, async () =>
+    listPrompts()
+  );
+
+  server.setRequestHandler(GetPromptRequestSchema, async (req) =>
+    getPrompt(req.params.name, req.params.arguments)
+  );
+
   const notifyResourceListChanged = () => {
-    server.sendResourceListChanged().catch(() => {});
+    try {
+      server.sendResourceListChanged().catch((err: unknown) => {
+        process.stderr.write(
+          `[gemini-cli-mcp] sendResourceListChanged failed: ${err instanceof Error ? err.message : String(err)}\n`
+        );
+      });
+    } catch (err) {
+      process.stderr.write(
+        `[gemini-cli-mcp] sendResourceListChanged threw synchronously: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
   };
-  setJobListChangedCallback(notifyResourceListChanged);
+  jobStore.setJobListChangedCallback(notifyResourceListChanged);
   sessionStore.setListChangedCallback(notifyResourceListChanged);
   server.setRequestHandler(SetLevelRequestSchema, async (req) => {
     setMcpLogLevel(req.params.level);
