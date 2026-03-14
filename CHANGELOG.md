@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.4.1...gemini-cli-mcp-v0.5.0) (2026-03-14)
+
+
+### Features
+
+* 5 quick-win enhancements for 0.5.0 ([6fdba63](https://github.com/guibarscevicius/gemini-cli-mcp/commit/6fdba6378186167eb2d06db9807471bd0355e20d))
+* 5 quick-win enhancements for 0.5.0 ([#44](https://github.com/guibarscevicius/gemini-cli-mcp/issues/44) [#45](https://github.com/guibarscevicius/gemini-cli-mcp/issues/45) [#46](https://github.com/guibarscevicius/gemini-cli-mcp/issues/46) [#47](https://github.com/guibarscevicius/gemini-cli-mcp/issues/47) [#48](https://github.com/guibarscevicius/gemini-cli-mcp/issues/48)) ([6a987a4](https://github.com/guibarscevicius/gemini-cli-mcp/commit/6a987a429c1d8a266a4a022d837a245852614b24))
+* add gemini-batch tool for parallel prompt processing ([#75](https://github.com/guibarscevicius/gemini-cli-mcp/issues/75)) ([a91a88e](https://github.com/guibarscevicius/gemini-cli-mcp/commit/a91a88e9db67e14d5e8b7fdc11afcb2efcfe9bc2))
+* add MCP Resources — gemini:// URIs for health, sessions, jobs ([#50](https://github.com/guibarscevicius/gemini-cli-mcp/issues/50)) ([#73](https://github.com/guibarscevicius/gemini-cli-mcp/issues/73)) ([abe0ec5](https://github.com/guibarscevicius/gemini-cli-mcp/commit/abe0ec56d1ae050a0f7ceeb09d2d3e28f984d7c8))
+* add MCP tool annotations and titles to all 4 tools ([#68](https://github.com/guibarscevicius/gemini-cli-mcp/issues/68)) ([289c48d](https://github.com/guibarscevicius/gemini-cli-mcp/commit/289c48d76ed12e44c6f822d23c9af798bb0a9ec4))
+* gemini-export tool — export session conversation history ([#49](https://github.com/guibarscevicius/gemini-cli-mcp/issues/49)) ([#71](https://github.com/guibarscevicius/gemini-cli-mcp/issues/71)) ([58a5d3d](https://github.com/guibarscevicius/gemini-cli-mcp/commit/58a5d3d240c7d7e1ecf17c5a046843780113afb4))
+* MCP logging capability (issue [#52](https://github.com/guibarscevicius/gemini-cli-mcp/issues/52)) ([#72](https://github.com/guibarscevicius/gemini-cli-mcp/issues/72)) ([ced1433](https://github.com/guibarscevicius/gemini-cli-mcp/commit/ced143303173f299af8b55faa7db2725afbeba78))
+* MCP Prompts — ListPrompts and GetPrompt handlers (issue [#51](https://github.com/guibarscevicius/gemini-cli-mcp/issues/51)) ([#74](https://github.com/guibarscevicius/gemini-cli-mcp/issues/74)) ([9dfac51](https://github.com/guibarscevicius/gemini-cli-mcp/commit/9dfac51a97aa9ca6433dadc9d2ec8577e3a96437))
+
+
+### Bug Fixes
+
+* address all PR review findings (C1/C2/I1-I5/S1-S5) ([90ed223](https://github.com/guibarscevicius/gemini-cli-mcp/commit/90ed223759bbb21750aeffc6003138fbf3258258))
+* use ROLLBACK (not COMMIT) on session-not-found path in appendTurn ([0d78dac](https://github.com/guibarscevicius/gemini-cli-mcp/commit/0d78dac64e06071cfb547d29f183bad6046ba797))
+
 ## [0.4.1](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.4.0...gemini-cli-mcp-v0.4.1) (2026-03-11)
 
 
