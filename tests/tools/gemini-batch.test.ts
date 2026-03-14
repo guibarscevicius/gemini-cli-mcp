@@ -327,4 +327,12 @@ describe("geminiBatch", () => {
     expect(result.results[1].index).toBe(1);
     expect(result.results[2].index).toBe(2);
   });
+
+  it("handles case where job disappears from store before completion (safety check)", async () => {
+    mockJobStore.getJob.mockReturnValueOnce(makeJob("ok")).mockReturnValueOnce(undefined);
+    const result = (await geminiBatch({ prompts: ["p1", "p2"] })) as GeminiBatchSyncOutput;
+    expect(result.results[0].status).toBe("done");
+    expect(result.results[1].status).toBe("error");
+    expect(result.results[1].error).toContain("disappeared before it could complete");
+  });
 });

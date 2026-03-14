@@ -101,7 +101,10 @@ export async function geminiBatch(input: unknown): Promise<GeminiBatchOutput> {
   // Sync mode: wait for all job completions, collect results preserving input order
   const settled = await Promise.allSettled(
     items.map(async ({ jobId }) => {
-      const job = jobStore.getJob(jobId)!;
+      const job = jobStore.getJob(jobId);
+      if (!job) {
+        throw new Error(`Job ${jobId} disappeared before it could complete`);
+      }
       return await job.completion;
     })
   );
