@@ -102,9 +102,10 @@ export function sweepExpiredJobs(): void {
   for (const [id, job] of jobs) {
     if (job.createdAt < cutoff) {
       if (job.status === "pending") {
+        const ageMs = Date.now() - job.createdAt;
         process.stderr.write(`[gemini-cli-mcp] GC: pending job ${id} expired after ${JOB_TTL_MS}ms — evicting\n`);
-        mcpLog("debug", "gc", { event: "job_gc_evicted", jobId: id, ageMs: JOB_TTL_MS });
         job._reject(new Error("Job timed out and was garbage collected"));
+        mcpLog("warning", "gc", { event: "job_gc_evicted", jobId: id, ageMs });
       }
       unregisterByJobId(id);
       jobs.delete(id);

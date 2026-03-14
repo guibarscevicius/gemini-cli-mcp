@@ -64,7 +64,7 @@ import { geminiCancel } from "../src/tools/gemini-cancel.js";
 import { geminiHealth } from "../src/tools/gemini-health.js";
 import { handleCallTool } from "../src/dispatcher.js";
 import { createServer } from "../src/index.js";
-import { _resetMcpLogger } from "../src/logging.js";
+import { _resetMcpLogger, initMcpLogger } from "../src/logging.js";
 
 const mockAskGemini = vi.mocked(askGemini);
 const mockGeminiReply = vi.mocked(geminiReply);
@@ -100,6 +100,25 @@ describe("MCP server capabilities", () => {
       tools: {},
       logging: {},
     });
+  });
+});
+
+describe("MCP logging events via dispatcher", () => {
+  it("emits tool_invocation_start and tool_invocation_end when a tool is dispatched", async () => {
+    const mockServer = { sendLoggingMessage: vi.fn().mockResolvedValue(undefined) };
+    initMcpLogger(mockServer as never);
+
+    await handleCallTool("ask-gemini", { prompt: "hello" });
+
+    const calls = mockServer.sendLoggingMessage.mock.calls.map((c) => c[0].data.event);
+    expect(calls).toContain("tool_invocation_start");
+    expect(calls).toContain("tool_invocation_end");
+
+    const endCall = mockServer.sendLoggingMessage.mock.calls.find(
+      (c) => c[0].data.event === "tool_invocation_end"
+    )![0];
+    expect(endCall.data.status).toBe("ok");
+    expect(typeof endCall.data.durationMs).toBe("number");
   });
 });
 

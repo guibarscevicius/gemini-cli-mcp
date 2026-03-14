@@ -84,6 +84,26 @@ describe("mcp logging", () => {
     expect(server.sendLoggingMessage).not.toHaveBeenCalled();
   });
 
+  it("allows notice when min level is info (RFC 5424 boundary)", () => {
+    const server = makeMockServer();
+    initMcpLogger(server as unknown as LoggerServer);
+    setMcpLogLevel("info");
+
+    mcpLog("notice", "tests", { event: "allowed" });
+
+    expect(server.sendLoggingMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows critical when min level is warning (RFC 5424 boundary)", () => {
+    const server = makeMockServer();
+    initMcpLogger(server as unknown as LoggerServer);
+    setMcpLogLevel("warning");
+
+    mcpLog("critical", "tests", { event: "allowed" });
+
+    expect(server.sendLoggingMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("setMcpLogLevel updates filtering", () => {
     const server = makeMockServer();
     initMcpLogger(server as unknown as LoggerServer);
