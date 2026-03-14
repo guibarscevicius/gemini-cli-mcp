@@ -7,7 +7,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   CancelledNotificationSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
+  ReadResourceRequestSchema,
   SetLevelRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { createRequire } from "node:module";
@@ -21,8 +24,11 @@ import { geminiExportToolDefinition } from "./tools/gemini-export.js";
 import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
+import { setJobListChangedCallback } from "./job-store.js";
 import { warmPool } from "./gemini-runner.js";
 import { initMcpLogger, setMcpLogLevel } from "./logging.js";
+import { STATIC_RESOURCES, RESOURCE_TEMPLATES, readResource } from "./resources.js";
+import { sessionStore } from "./session-store.js";
 const _require = createRequire(import.meta.url);
 const { version: pkgVersion } = _require("../package.json") as { version: string };
 
@@ -56,9 +62,27 @@ export function registerToolHandlers(server: ToolServer): void {
 export function createServer(): Server {
   const server = new Server(
     { name: "gemini-cli-mcp", version: pkgVersion },
-    { capabilities: { tools: {}, logging: {} } }
+    { capabilities: { tools: {}, logging: {}, resources: { listChanged: true } } }
   );
   initMcpLogger(server);
+
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: STATIC_RESOURCES,
+  }));
+
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+    resourceTemplates: RESOURCE_TEMPLATES,
+  }));
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (req) =>
+    readResource(req.params.uri)
+  );
+
+  const notifyResourceListChanged = () => {
+    server.sendResourceListChanged().catch(() => {});
+  };
+  setJobListChangedCallback(notifyResourceListChanged);
+  sessionStore.setListChangedCallback(notifyResourceListChanged);
   server.setRequestHandler(SetLevelRequestSchema, async (req) => {
     setMcpLogLevel(req.params.level);
     return {};

@@ -92,13 +92,14 @@ beforeEach(() => {
 });
 
 describe("MCP server capabilities", () => {
-  it("advertises logging capability", () => {
+  it("advertises logging and resources capabilities", () => {
     const server = createServer() as unknown as {
-      _capabilities: { tools: Record<string, never>; logging: Record<string, never> };
+      _capabilities: { tools: Record<string, never>; logging: Record<string, never>; resources: { listChanged: boolean } };
     };
     expect(server._capabilities).toEqual({
       tools: {},
       logging: {},
+      resources: { listChanged: true },
     });
   });
 });

@@ -24,6 +24,27 @@ interface JobInternal extends Job {
 
 const jobs = new Map<string, JobInternal>();
 
+export interface ActiveJobEntry { id: string; createdAt: number }
+
+let _jobListChangedCb: (() => void) | undefined;
+
+export function setJobListChangedCallback(cb: () => void): void {
+  _jobListChangedCb = cb;
+}
+
+/** @internal For test isolation only — not part of the public API. */
+export function _resetJobListChangedCallback(): void {
+  _jobListChangedCb = undefined;
+}
+
+export function listActiveJobs(): ActiveJobEntry[] {
+  const result: ActiveJobEntry[] = [];
+  for (const [id, job] of jobs) {
+    if (job.status === "pending") result.push({ id, createdAt: job.createdAt });
+  }
+  return result;
+}
+
 export function createJob(jobId: string): void {
   let resolveCompletion!: (response: string) => void;
   let rejectCompletion!: (error: Error) => void;
@@ -41,6 +62,7 @@ export function createJob(jobId: string): void {
     _resolve: resolveCompletion,
     _reject: rejectCompletion,
   });
+  _jobListChangedCb?.();
 }
 
 export function getJob(jobId: string): Job | undefined {
@@ -69,6 +91,7 @@ export function completeJob(jobId: string, response: string): void {
     job.response = response;
     job.subprocess = undefined;
     job._resolve(response);
+    _jobListChangedCb?.();
   }
 }
 
@@ -79,6 +102,7 @@ export function failJob(jobId: string, error: string): void {
     job.error = error;
     job.subprocess = undefined;
     job._reject(new Error(error));
+    _jobListChangedCb?.();
   }
 }
 
@@ -88,6 +112,7 @@ export function cancelJob(jobId: string): void {
     job.status = "cancelled";
     job.subprocess = undefined;
     job._reject(new Error("Job was cancelled"));
+    _jobListChangedCb?.();
   }
 }
 

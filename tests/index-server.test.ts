@@ -17,6 +17,7 @@ vi.mock("../src/job-store.js", () => ({
   failJob: vi.fn(),
   sweepExpiredJobs: vi.fn(),
   appendChunk: vi.fn(),
+  setJobListChangedCallback: vi.fn(),
 }));
 
 vi.mock("../src/dispatcher.js", () => ({

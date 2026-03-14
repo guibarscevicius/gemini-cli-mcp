@@ -25,8 +25,11 @@ export class SessionStore {
   private readonly stmtGcSelect: ReturnType<DatabaseSync["prepare"]>;
   private readonly stmtGcDelete: ReturnType<DatabaseSync["prepare"]>;
   private readonly stmtCount: ReturnType<DatabaseSync["prepare"]>;
+  private readonly stmtListSessions: ReturnType<DatabaseSync["prepare"]>;
+  private readonly stmtGetMeta: ReturnType<DatabaseSync["prepare"]>;
   /** Maps sessionId → jobId for in-flight async jobs. */
   private pendingJobs = new Map<string, string>();
+  private _listChangedCb?: () => void;
 
   constructor(ttlMs = SESSION_TTL_MS, gcIntervalMs = GC_INTERVAL_MS, dbPath?: string) {
     const resolvedPath =
@@ -57,6 +60,12 @@ export class SessionStore {
     this.stmtGcSelect = this.db.prepare("SELECT id FROM sessions WHERE last_accessed < ?");
     this.stmtGcDelete = this.db.prepare("DELETE FROM sessions WHERE last_accessed < ?");
     this.stmtCount = this.db.prepare("SELECT COUNT(*) as n FROM sessions");
+    this.stmtListSessions = this.db.prepare(
+      "SELECT id, last_accessed, turns FROM sessions ORDER BY last_accessed DESC"
+    );
+    this.stmtGetMeta = this.db.prepare(
+      "SELECT last_accessed, turns FROM sessions WHERE id = ?"
+    );
 
     this.gcTimer = setInterval(() => {
       try {
@@ -80,6 +89,7 @@ export class SessionStore {
 
   create(id: string): void {
     this.stmtCreate.run(id, JSON.stringify([]), Date.now());
+    this._listChangedCb?.();
   }
 
   get(id: string): boolean {
@@ -165,6 +175,27 @@ export class SessionStore {
 
   getPendingJob(sessionId: string): string | undefined {
     return this.pendingJobs.get(sessionId);
+  }
+
+  setListChangedCallback(cb: () => void): void {
+    this._listChangedCb = cb;
+  }
+
+  listSessions(): Array<{ id: string; lastAccessed: number; turnCount: number }> {
+    const rows = this.stmtListSessions.all() as {
+      id: string; last_accessed: number; turns: string;
+    }[];
+    return rows.map(row => ({
+      id: row.id,
+      lastAccessed: row.last_accessed,
+      turnCount: (JSON.parse(row.turns) as Turn[]).length,
+    }));
+  }
+
+  getSessionMeta(id: string): { lastAccessed: number; turns: Turn[] } | undefined {
+    const row = this.stmtGetMeta.get(id) as { last_accessed: number; turns: string } | undefined;
+    if (!row) return undefined;
+    return { lastAccessed: row.last_accessed, turns: JSON.parse(row.turns) as Turn[] };
   }
 
   destroy(): void {
