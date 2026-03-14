@@ -63,6 +63,8 @@ import { geminiPoll } from "../src/tools/gemini-poll.js";
 import { geminiCancel } from "../src/tools/gemini-cancel.js";
 import { geminiHealth } from "../src/tools/gemini-health.js";
 import { handleCallTool } from "../src/dispatcher.js";
+import { createServer } from "../src/index.js";
+import { _resetMcpLogger, initMcpLogger } from "../src/logging.js";
 
 const mockAskGemini = vi.mocked(askGemini);
 const mockGeminiReply = vi.mocked(geminiReply);
@@ -74,6 +76,7 @@ const VALID_JOB_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetMcpLogger();
   mockAskGemini.mockResolvedValue({ jobId: VALID_JOB_ID, sessionId: "abc-123" });
   mockGeminiReply.mockResolvedValue({ jobId: VALID_JOB_ID });
   mockGeminiPoll.mockResolvedValue({ status: "done", response: "the answer" });
@@ -85,6 +88,37 @@ beforeEach(() => {
     jobs: { active: 0, total: 0 },
     sessions: { total: 0 },
     server: { uptime: 1, version: "0.5.0" },
+  });
+});
+
+describe("MCP server capabilities", () => {
+  it("advertises logging capability", () => {
+    const server = createServer() as unknown as {
+      _capabilities: { tools: Record<string, never>; logging: Record<string, never> };
+    };
+    expect(server._capabilities).toEqual({
+      tools: {},
+      logging: {},
+    });
+  });
+});
+
+describe("MCP logging events via dispatcher", () => {
+  it("emits tool_invocation_start and tool_invocation_end when a tool is dispatched", async () => {
+    const mockServer = { sendLoggingMessage: vi.fn().mockResolvedValue(undefined) };
+    initMcpLogger(mockServer as never);
+
+    await handleCallTool("ask-gemini", { prompt: "hello" });
+
+    const calls = mockServer.sendLoggingMessage.mock.calls.map((c) => c[0].data.event);
+    expect(calls).toContain("tool_invocation_start");
+    expect(calls).toContain("tool_invocation_end");
+
+    const endCall = mockServer.sendLoggingMessage.mock.calls.find(
+      (c) => c[0].data.event === "tool_invocation_end"
+    )![0];
+    expect(endCall.data.status).toBe("ok");
+    expect(typeof endCall.data.durationMs).toBe("number");
   });
 });
 

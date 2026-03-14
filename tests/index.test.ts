@@ -9,7 +9,8 @@ vi.mock("../src/dispatcher.js", () => ({
 }));
 
 import { handleCallTool } from "../src/dispatcher.js";
-import { registerToolHandlers } from "../src/index.js";
+import { createServer, registerToolHandlers } from "../src/index.js";
+import { _resetMcpLogger } from "../src/logging.js";
 import { askGeminiToolDefinition } from "../src/tools/ask-gemini.js";
 import { geminiReplyToolDefinition } from "../src/tools/gemini-reply.js";
 import { geminiPollToolDefinition } from "../src/tools/gemini-poll.js";
@@ -30,6 +31,7 @@ describe("index wiring", () => {
   beforeEach(() => {
     handlers = new Map();
     vi.clearAllMocks();
+    _resetMcpLogger();
     mockHandleCallTool.mockResolvedValue({
       content: [{ type: "text", text: "ok" }],
     });
@@ -82,5 +84,15 @@ describe("index wiring", () => {
       args,
       expect.objectContaining({ progressToken: undefined, requestId: undefined })
     );
+  });
+
+  it("createServer includes logging capability", () => {
+    const server = createServer() as unknown as {
+      _capabilities: { tools: Record<string, never>; logging: Record<string, never> };
+    };
+    expect(server._capabilities).toEqual({
+      tools: {},
+      logging: {},
+    });
   });
 });

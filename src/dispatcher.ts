@@ -13,6 +13,7 @@ import { geminiPoll } from "./tools/gemini-poll.js";
 import { geminiCancel } from "./tools/gemini-cancel.js";
 import { geminiHealth } from "./tools/gemini-health.js";
 import { geminiExport } from "./tools/gemini-export.js";
+import { mcpLog } from "./logging.js";
 
 export interface ToolCallContext {
   /**
@@ -47,81 +48,99 @@ export async function handleCallTool(
   args: unknown,
   ctx: ToolCallContext = {}
 ): Promise<ToolResponse> {
+  const startMs = Date.now();
+  let status: "ok" | "error" = "ok";
+  mcpLog("info", "tools", { event: "tool_invocation_start", tool: name });
+
   try {
-    switch (name) {
-      case "ask-gemini": {
-        const result = await askGemini(args, ctx);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: result as unknown as Record<string, unknown>,
-        };
+    try {
+      switch (name) {
+        case "ask-gemini": {
+          const result = await askGemini(args, ctx);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            structuredContent: result as unknown as Record<string, unknown>,
+          };
+        }
+
+        case "gemini-reply": {
+          const result = await geminiReply(args, ctx);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            structuredContent: result as unknown as Record<string, unknown>,
+          };
+        }
+
+        case "gemini-poll": {
+          const result = await geminiPoll(args);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            structuredContent: result as unknown as Record<string, unknown>,
+          };
+        }
+
+        case "gemini-cancel": {
+          const result = await geminiCancel(args);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            structuredContent: result as unknown as Record<string, unknown>,
+          };
+        }
+
+        case "gemini-health": {
+          const result = await geminiHealth(args);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            structuredContent: result as unknown as Record<string, unknown>,
+          };
+        }
+
+        case "gemini-export": {
+          const result = await geminiExport(args);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            structuredContent: result as unknown as Record<string, unknown>,
+          };
+        }
+
+        default:
+          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+      }
+    } catch (err) {
+      // Protocol-level errors: re-throw so the MCP SDK encodes them as JSON-RPC errors.
+      // If caught here, the ErrorCode is discarded and the host receives an opaque isError
+      // content response - breaking clients that branch on error codes.
+      if (err instanceof McpError) {
+        status = "error";
+        throw err;
       }
 
-      case "gemini-reply": {
-        const result = await geminiReply(args, ctx);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: result as unknown as Record<string, unknown>,
-        };
+      // Input validation failure: surface field-level details as a protocol error
+      // rather than an opaque isError response, so hosts can distinguish bad input
+      // from runtime failures.
+      if (err instanceof ZodError) {
+        status = "error";
+        const detail = err.errors
+          .map((e) => `${e.path.join(".") || "input"}: ${e.message}`)
+          .join("; ");
+        throw new McpError(ErrorCode.InvalidParams, `Invalid arguments: ${detail}`);
       }
 
-      case "gemini-poll": {
-        const result = await geminiPoll(args);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: result as unknown as Record<string, unknown>,
-        };
-      }
-
-      case "gemini-cancel": {
-        const result = await geminiCancel(args);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: result as unknown as Record<string, unknown>,
-        };
-      }
-
-      case "gemini-health": {
-        const result = await geminiHealth(args);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: result as unknown as Record<string, unknown>,
-        };
-      }
-
-      case "gemini-export": {
-        const result = await geminiExport(args);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: result as unknown as Record<string, unknown>,
-        };
-      }
-
-      default:
-        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+      // Unexpected runtime error — log to stderr for debugging, return as tool error
+      status = "error";
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? `\n${err.stack}` : "";
+      process.stderr.write(
+        `[gemini-cli-mcp] Unexpected error in tool "${name}": ${message}${stack}\n`
+      );
+      return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
     }
-  } catch (err) {
-    // Protocol-level errors: re-throw so the MCP SDK encodes them as JSON-RPC errors.
-    // If caught here, the ErrorCode is discarded and the host receives an opaque isError
-    // content response - breaking clients that branch on error codes.
-    if (err instanceof McpError) throw err;
-
-    // Input validation failure: surface field-level details as a protocol error
-    // rather than an opaque isError response, so hosts can distinguish bad input
-    // from runtime failures.
-    if (err instanceof ZodError) {
-      const detail = err.errors
-        .map((e) => `${e.path.join(".") || "input"}: ${e.message}`)
-        .join("; ");
-      throw new McpError(ErrorCode.InvalidParams, `Invalid arguments: ${detail}`);
-    }
-
-    // Unexpected runtime error — log to stderr for debugging, return as tool error
-    const message = err instanceof Error ? err.message : String(err);
-    const stack = err instanceof Error ? `\n${err.stack}` : "";
-    process.stderr.write(
-      `[gemini-cli-mcp] Unexpected error in tool "${name}": ${message}${stack}\n`
-    );
-    return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
+  } finally {
+    mcpLog("info", "tools", {
+      event: "tool_invocation_end",
+      tool: name,
+      durationMs: Date.now() - startMs,
+      status,
+    });
   }
 }

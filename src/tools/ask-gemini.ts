@@ -7,6 +7,7 @@ import type { ToolCallContext } from "../dispatcher.js";
 import { runGeminiAsync, waitForJob, DEFAULT_WAIT_MS } from "./shared.js";
 import { registerRequest, unregisterRequest } from "../request-map.js";
 import { SemaphoreTimeoutError } from "../gemini-runner.js";
+import { mcpLog } from "../logging.js";
 
 export const AskGeminiSchema = z.object({
   prompt: z.string().min(1).describe("The prompt to send to Gemini"),
@@ -91,6 +92,7 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[gemini-cli-mcp] job ${jobId} failed: ${message}\n`);
+      mcpLog("error", "jobs", { event: "job_failed", jobId, error: message });
       try {
         jobStore.failJob(jobId, message);
         sessionStore.clearPendingJob(sessionId);

@@ -1,6 +1,7 @@
 import { runGemini, spawnGemini, type GeminiExecutor } from "../gemini-runner.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
+import { mcpLog } from "../logging.js";
 
 /**
  * Fire-and-forget helper: runs runGemini in the background, updating job state as
@@ -100,6 +101,7 @@ export async function waitForJob(
       process.stderr.write(
         `[gemini-cli-mcp] wait-mode timed out after ${timeoutMs}ms for job ${jobId} — job continues in background, poll to retrieve result\n`
       );
+      mcpLog("warning", "jobs", { event: "wait_timeout", jobId, timeoutMs });
       return { partialResponse: job.partialResponse, timedOut: true };
     }
     throw err;
