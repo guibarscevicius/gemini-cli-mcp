@@ -27,21 +27,21 @@ describe("PROMPTS definitions", () => {
       .filter((a) => a.required)
       .map((a) => a.name);
     expect(codeReviewRequired).toContain("files");
-    expect(codeReviewRequired).toContain("cwd");
+    expect(codeReviewRequired).not.toContain("cwd");
     expect(codeReviewRequired).not.toContain("focus");
 
     const archRequired = getArgs("architecture-analysis")
       .filter((a) => a.required)
       .map((a) => a.name);
     expect(archRequired).toContain("directory");
-    expect(archRequired).toContain("cwd");
+    expect(archRequired).not.toContain("cwd");
     expect(archRequired).not.toContain("question");
 
     const explainRequired = getArgs("explain-code")
       .filter((a) => a.required)
       .map((a) => a.name);
     expect(explainRequired).toContain("file");
-    expect(explainRequired).toContain("cwd");
+    expect(explainRequired).not.toContain("cwd");
     expect(explainRequired).not.toContain("symbol");
     expect(explainRequired).not.toContain("audience");
 
@@ -135,8 +135,13 @@ describe("getPrompt — code-review", () => {
     expect(() => getPrompt("code-review", { cwd: "/app" })).toThrow(McpError);
   });
 
-  it("throws McpError when 'cwd' is missing", () => {
-    expect(() => getPrompt("code-review", { files: "src/auth.ts" })).toThrow(McpError);
+  it("throws McpError when 'files' is empty string", () => {
+    expect(() => getPrompt("code-review", { files: "", cwd: "/app" })).toThrow(McpError);
+  });
+
+  it("uses process.cwd() when cwd is not provided", () => {
+    const result = getPrompt("code-review", { files: "src/auth.ts" });
+    expect(result.messages[0].content.text).toMatch(/^<!-- working directory: .+ -->/);
   });
 });
 
@@ -174,10 +179,6 @@ describe("getPrompt — architecture-analysis", () => {
 
   it("throws McpError when 'directory' is missing", () => {
     expect(() => getPrompt("architecture-analysis", { cwd: "/app" })).toThrow(McpError);
-  });
-
-  it("throws McpError when 'cwd' is missing", () => {
-    expect(() => getPrompt("architecture-analysis", { directory: "src/" })).toThrow(McpError);
   });
 });
 
@@ -230,12 +231,13 @@ describe("getPrompt — explain-code", () => {
     ).toThrow(McpError);
   });
 
-  it("throws McpError when 'file' is missing", () => {
-    expect(() => getPrompt("explain-code", { cwd: "/app" })).toThrow(McpError);
+  it("omits symbol focus line when symbol is not provided", () => {
+    const result = getPrompt("explain-code", { file: "src/auth.ts", cwd: "/app" });
+    expect(result.messages[0].content.text).not.toContain("Focus on the");
   });
 
-  it("throws McpError when 'cwd' is missing", () => {
-    expect(() => getPrompt("explain-code", { file: "src/auth.ts" })).toThrow(McpError);
+  it("throws McpError when 'file' is missing", () => {
+    expect(() => getPrompt("explain-code", { cwd: "/app" })).toThrow(McpError);
   });
 });
 
@@ -283,8 +285,17 @@ describe("getPrompt — debug-error", () => {
     );
   });
 
+  it("omits context line when context is empty string", () => {
+    const result = getPrompt("debug-error", { error: "E", context: "" });
+    expect(result.messages[0].content.text).not.toContain("Additional context:");
+  });
+
   it("throws McpError when 'error' is missing", () => {
     expect(() => getPrompt("debug-error", {})).toThrow(McpError);
+  });
+
+  it("throws McpError when 'error' is empty string", () => {
+    expect(() => getPrompt("debug-error", { error: "" })).toThrow(McpError);
   });
 
   it("filters empty strings from files with leading/trailing whitespace", () => {
@@ -305,11 +316,8 @@ describe("getPrompt — debug-error", () => {
 
 describe("getPrompt — unknown prompt", () => {
   it("throws McpError with the unknown prompt name", () => {
-    expect(() => getPrompt("unknown-prompt", {})).toThrow(McpError);
-    try {
-      getPrompt("unknown-prompt", {});
-    } catch (err) {
-      expect((err as McpError).message).toContain("Unknown prompt: unknown-prompt");
-    }
+    expect(() => getPrompt("unknown-prompt", {})).toThrowError(
+      /Unknown prompt: unknown-prompt/
+    );
   });
 });

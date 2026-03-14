@@ -114,6 +114,15 @@ describe("index wiring", () => {
     expect(rh.has("resources/read")).toBe(true);
   });
 
+  it("createServer registers ListPrompts and GetPrompt handlers", () => {
+    const server = createServer() as unknown as {
+      _requestHandlers: Map<string, unknown>;
+    };
+    const rh = server._requestHandlers;
+    expect(rh.has("prompts/list")).toBe(true);
+    expect(rh.has("prompts/get")).toBe(true);
+  });
+
   it("ListResources handler returns STATIC_RESOURCES", async () => {
     const server = createServer() as unknown as {
       _requestHandlers: Map<string, (req: unknown) => Promise<unknown>>;

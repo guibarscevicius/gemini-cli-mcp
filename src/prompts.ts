@@ -29,8 +29,8 @@ export const PROMPTS: Prompt[] = [
       },
       {
         name: "cwd",
-        description: "Working directory for @file expansion",
-        required: true,
+        description: "Working directory for @file expansion (defaults to server cwd)",
+        required: false,
       },
     ],
   },
@@ -53,8 +53,8 @@ export const PROMPTS: Prompt[] = [
       },
       {
         name: "cwd",
-        description: "Working directory for @file expansion",
-        required: true,
+        description: "Working directory for @file expansion (defaults to server cwd)",
+        required: false,
       },
     ],
   },
@@ -82,8 +82,8 @@ export const PROMPTS: Prompt[] = [
       },
       {
         name: "cwd",
-        description: "Working directory for @file expansion",
-        required: true,
+        description: "Working directory for @file expansion (defaults to server cwd)",
+        required: false,
       },
     ],
   },
@@ -168,9 +168,9 @@ function validateEnum(
 
 type PromptResult = GetPromptResult;
 
-function buildCodeReview(args: Record<string, string> | undefined): PromptResult {
+function buildCodeReview(def: Prompt, args: Record<string, string> | undefined): PromptResult {
   const files = requireArg(args, "code-review", "files");
-  const cwd   = requireArg(args, "code-review", "cwd");
+  const cwd   = args?.["cwd"] ?? process.cwd();
   const focus  = args?.["focus"] ?? "all";
 
   validateEnum(focus, FOCUS_VALUES, "code-review", "focus");
@@ -188,14 +188,14 @@ function buildCodeReview(args: Record<string, string> | undefined): PromptResult
     fileRefs;
 
   return {
-    description: PROMPTS.find((p) => p.name === "code-review")!.description,
+    description: def.description,
     messages: [{ role: "user", content: { type: "text", text } }],
   };
 }
 
-function buildArchitectureAnalysis(args: Record<string, string> | undefined): PromptResult {
+function buildArchitectureAnalysis(def: Prompt, args: Record<string, string> | undefined): PromptResult {
   const directory = requireArg(args, "architecture-analysis", "directory");
-  const cwd       = requireArg(args, "architecture-analysis", "cwd");
+  const cwd       = args?.["cwd"] ?? process.cwd();
   const question  = args?.["question"];
 
   const text =
@@ -205,14 +205,14 @@ function buildArchitectureAnalysis(args: Record<string, string> | undefined): Pr
     `\n\n@${directory}`;
 
   return {
-    description: PROMPTS.find((p) => p.name === "architecture-analysis")!.description,
+    description: def.description,
     messages: [{ role: "user", content: { type: "text", text } }],
   };
 }
 
-function buildExplainCode(args: Record<string, string> | undefined): PromptResult {
+function buildExplainCode(def: Prompt, args: Record<string, string> | undefined): PromptResult {
   const file     = requireArg(args, "explain-code", "file");
-  const cwd      = requireArg(args, "explain-code", "cwd");
+  const cwd      = args?.["cwd"] ?? process.cwd();
   const symbol   = args?.["symbol"];
   const audience = args?.["audience"] ?? "intermediate";
 
@@ -225,12 +225,12 @@ function buildExplainCode(args: Record<string, string> | undefined): PromptResul
     `\n\n@${file}`;
 
   return {
-    description: PROMPTS.find((p) => p.name === "explain-code")!.description,
+    description: def.description,
     messages: [{ role: "user", content: { type: "text", text } }],
   };
 }
 
-function buildDebugError(args: Record<string, string> | undefined): PromptResult {
+function buildDebugError(def: Prompt, args: Record<string, string> | undefined): PromptResult {
   const error   = requireArg(args, "debug-error", "error");
   const files   = args?.["files"];
   const context = args?.["context"];
@@ -246,7 +246,7 @@ function buildDebugError(args: Record<string, string> | undefined): PromptResult
     (context ? `\n\nAdditional context: ${context}` : "");
 
   return {
-    description: PROMPTS.find((p) => p.name === "debug-error")!.description,
+    description: def.description,
     messages: [{ role: "user", content: { type: "text", text } }],
   };
 }
@@ -263,15 +263,19 @@ export function getPrompt(
   name: string,
   args?: Record<string, string>
 ): PromptResult {
+  const def = PROMPTS.find((p) => p.name === name);
+  if (!def) {
+    throw new McpError(ErrorCode.InvalidParams, `Unknown prompt: ${name}`);
+  }
   switch (name) {
     case "code-review":
-      return buildCodeReview(args);
+      return buildCodeReview(def, args);
     case "architecture-analysis":
-      return buildArchitectureAnalysis(args);
+      return buildArchitectureAnalysis(def, args);
     case "explain-code":
-      return buildExplainCode(args);
+      return buildExplainCode(def, args);
     case "debug-error":
-      return buildDebugError(args);
+      return buildDebugError(def, args);
     default:
       throw new McpError(ErrorCode.InvalidParams, `Unknown prompt: ${name}`);
   }
