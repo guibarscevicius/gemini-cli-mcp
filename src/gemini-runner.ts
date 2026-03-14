@@ -7,6 +7,7 @@ import * as nodePath from "node:path";
 import { escape as escapeGlob, glob } from "glob";
 import pLimit from "p-limit";
 import { WarmProcessPool, type WarmProcess } from "./warm-pool.js";
+import { mcpLog } from "./logging.js";
 
 export class GeminiOutputError extends Error {
   constructor(message: string, public sanitizedMessage: string) {
@@ -250,10 +251,18 @@ async function withRetry<T>(
         throw err;
       }
       retryCount++;
+      const errorMsg = err instanceof Error ? err.message : String(err);
       const delay = Math.min(RETRY_BASE_MS * 2 ** (attempt - 1) + Math.random() * 500, 10_000);
       process.stderr.write(
-        `[gemini-runner] retry ${attempt + 1}/${maxAttempts} after ${Math.round(delay)}ms (${(err as Error).message.slice(0, 60)})\n`
+        `[gemini-runner] retry ${attempt + 1}/${maxAttempts} after ${Math.round(delay)}ms (${errorMsg.slice(0, 60)})\n`
       );
+      mcpLog("warning", "retry", {
+        event: "retry_attempt",
+        attempt: attempt + 1,
+        maxAttempts,
+        delayMs: delay,
+        reason: errorMsg.slice(0, 120),
+      });
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }

@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { unregisterByJobId } from "./request-map.js";
+import { mcpLog } from "./logging.js";
 
 export type JobStatus = "pending" | "done" | "error" | "cancelled";
 
@@ -102,6 +103,7 @@ export function sweepExpiredJobs(): void {
     if (job.createdAt < cutoff) {
       if (job.status === "pending") {
         process.stderr.write(`[gemini-cli-mcp] GC: pending job ${id} expired after ${JOB_TTL_MS}ms — evicting\n`);
+        mcpLog("debug", "gc", { event: "job_gc_evicted", jobId: id, ageMs: JOB_TTL_MS });
         job._reject(new Error("Job timed out and was garbage collected"));
       }
       unregisterByJobId(id);

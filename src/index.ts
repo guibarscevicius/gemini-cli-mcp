@@ -8,6 +8,7 @@ import {
   CallToolRequestSchema,
   CancelledNotificationSchema,
   ListToolsRequestSchema,
+  SetLevelRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { createRequire } from "node:module";
 
@@ -21,6 +22,7 @@ import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
 import { warmPool } from "./gemini-runner.js";
+import { initMcpLogger, setMcpLogLevel } from "./logging.js";
 const _require = createRequire(import.meta.url);
 const { version: pkgVersion } = _require("../package.json") as { version: string };
 
@@ -54,8 +56,13 @@ export function registerToolHandlers(server: ToolServer): void {
 export function createServer(): Server {
   const server = new Server(
     { name: "gemini-cli-mcp", version: pkgVersion },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {}, logging: {} } }
   );
+  initMcpLogger(server);
+  server.setRequestHandler(SetLevelRequestSchema, async (req) => {
+    setMcpLogLevel(req.params.level);
+    return {};
+  });
   registerToolHandlers(server);
   server.setNotificationHandler(CancelledNotificationSchema, async (notification) => {
     const requestId = notification.params?.requestId;

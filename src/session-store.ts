@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import nodePath from "node:path";
 import * as os from "node:os";
 import { mkdirSync } from "node:fs";
+import { mcpLog } from "./logging.js";
 
 export const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
 const GC_INTERVAL_MS = 5 * 60 * 1000; // 5 min
@@ -66,9 +67,11 @@ export class SessionStore {
         }
         this.stmtGcDelete.run(cutoff);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(
-          `[gemini-cli-mcp] session GC failed: ${err instanceof Error ? err.message : String(err)}\n`
+          `[gemini-cli-mcp] session GC failed: ${message}\n`
         );
+        mcpLog("warning", "gc", { event: "session_gc_error", error: message });
       }
     }, gcIntervalMs);
 

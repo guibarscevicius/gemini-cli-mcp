@@ -21,6 +21,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { mcpLog } from "./logging.js";
 
 /** Interval between keepalive writes to each idle process (ms). */
 const KEEPALIVE_INTERVAL_MS = 5_000;
@@ -117,6 +118,11 @@ export class WarmProcessPool {
                 `[gemini-cli-mcp] warm pool: gemini binary not found at '${this.binary}' — ` +
                 `pool disabled after ${WarmProcessPool.MAX_CONSECUTIVE_FAILURES} consecutive failures\n`
               );
+              mcpLog("warning", "pool", {
+                event: "pool_disabled",
+                reason: "binary not found",
+                consecutiveFailures: WarmProcessPool.MAX_CONSECUTIVE_FAILURES,
+              });
               // Reject any waiters that would otherwise hang indefinitely, then
               // permanently disable the pool so future acquire() calls fail fast.
               this.draining = true;
