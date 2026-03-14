@@ -74,7 +74,11 @@ export async function geminiBatch(input: unknown): Promise<GeminiBatchOutput> {
     jobId: randomUUID(),
   }));
 
-  // Create all jobs and fire them all in parallel (semaphore queues excess calls)
+  // Create all jobs and fire them all in parallel (semaphore queues excess calls).
+  // We pass {} (empty ToolCallContext) intentionally: each batch item is an independent
+  // fire-and-forget job, and there is no sensible way to multiplex N partial-response
+  // streams through a single MCP progressToken. Individual jobs can be cancelled
+  // post-hoc via gemini-cancel using the jobId returned in async mode.
   for (const { jobId, prompt } of items) {
     jobStore.createJob(jobId);
     runGeminiAsync(jobId, prompt, { model, cwd, tool: "gemini-batch", expandRefs }, {})
