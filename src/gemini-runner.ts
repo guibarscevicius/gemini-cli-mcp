@@ -352,6 +352,50 @@ function extractErrorDetail(
   return "gemini error (unknown)";
 }
 
+// ── Thinking loop detection ──────────────────────────────────────────────────
+// Gemini's thinking mode can enter a degenerate loop where the model repeats
+// short phrases ("I will output.\nEnd.\n") indefinitely.  We detect this by
+// checking the tail of the accumulated response for a short substring that
+// appears many times in quick succession.
+//
+// Configurable via GEMINI_THINKING_LOOP_INTERVAL_MS (check interval, default 60s)
+// and GEMINI_THINKING_LOOP_DISABLED=1 to disable entirely.
+
+const THINKING_LOOP_CHECK_MS = parseInt(
+  process.env.GEMINI_THINKING_LOOP_INTERVAL_MS ?? "60000",
+  10
+);
+const THINKING_LOOP_DISABLED = process.env.GEMINI_THINKING_LOOP_DISABLED === "1";
+
+/**
+ * Returns true if the tail of `text` contains a short repeated phrase,
+ * indicating the model is stuck in a thinking loop.
+ *
+ * Algorithm: take the last 2 KB of text, find any 20-60 char substring that
+ * appears 5+ times.  This catches patterns like "I will output.\nEnd.\n"
+ * repeated dozens of times.
+ */
+export function detectThinkingLoop(text: string): boolean {
+  if (text.length < 500) return false;
+  const tail = text.slice(-2048);
+
+  // Try phrase lengths 20, 30, 40, 50, 60
+  for (const len of [20, 30, 40, 50, 60]) {
+    // Take the last `len` chars as a candidate repeated phrase
+    const candidate = tail.slice(-len);
+    if (candidate.trim().length < 10) continue;
+
+    let count = 0;
+    let idx = 0;
+    while ((idx = tail.indexOf(candidate, idx)) !== -1) {
+      count++;
+      idx += candidate.length;
+    }
+    if (count >= 5) return true;
+  }
+  return false;
+}
+
 export interface GeminiOptions {
   model?: string;
   cwd?: string;
@@ -387,11 +431,13 @@ export function runWithWarmProcess(
     let lineBuffer = "";
     let settled = false;
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let loopCheckHandle: ReturnType<typeof setInterval> | undefined;
 
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (loopCheckHandle !== undefined) clearInterval(loopCheckHandle);
       fn();
     };
 
@@ -402,6 +448,24 @@ export function runWithWarmProcess(
       } catch { /* already dead */ }
       settle(() => reject(new Error(`Gemini warm process timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
+
+    // Periodic thinking loop detection — kills the process and returns
+    // accumulated content when the model is stuck repeating itself.
+    if (!THINKING_LOOP_DISABLED && THINKING_LOOP_CHECK_MS > 0) {
+      loopCheckHandle = setInterval(() => {
+        if (settled) return;
+        if (detectThinkingLoop(accumulated)) {
+          process.stderr.write(
+            `[gemini-cli-mcp] thinking loop detected after ${accumulated.length} chars — killing process\n`
+          );
+          try {
+            cp.kill("SIGTERM");
+            setTimeout(() => { try { cp.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
+          } catch { /* already dead */ }
+          settle(() => resolve(accumulated));
+        }
+      }, THINKING_LOOP_CHECK_MS);
+    }
 
     cp.stdout?.on("data", (data: Buffer) => {
       lineBuffer += data.toString("utf8");
@@ -513,11 +577,13 @@ export function spawnGemini(
   let lineBuffer = "";
   let settled = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let loopCheckHandle: ReturnType<typeof setInterval> | undefined;
 
   const settle = (fn: () => void) => {
     if (settled) return;
     settled = true;
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    if (loopCheckHandle !== undefined) clearInterval(loopCheckHandle);
     fn();
   };
 
@@ -528,6 +594,22 @@ export function spawnGemini(
       onError(new Error(`Gemini subprocess timed out after ${spawnOpts.timeout}ms`))
     );
   }, spawnOpts.timeout);
+
+  // Periodic thinking loop detection — kills the process and returns
+  // accumulated content when the model is stuck repeating itself.
+  if (!THINKING_LOOP_DISABLED && THINKING_LOOP_CHECK_MS > 0) {
+    loopCheckHandle = setInterval(() => {
+      if (settled) return;
+      if (detectThinkingLoop(accumulated)) {
+        process.stderr.write(
+          `[gemini-cli-mcp] thinking loop detected after ${accumulated.length} chars — killing process\n`
+        );
+        cp.kill("SIGTERM");
+        setTimeout(() => { try { cp.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
+        settle(() => onDone(accumulated));
+      }
+    }, THINKING_LOOP_CHECK_MS);
+  }
 
   cp.stdout?.on("data", (data: Buffer) => {
     lineBuffer += data.toString("utf8");
