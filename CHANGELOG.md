@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.5.0...gemini-cli-mcp-v0.6.0) (2026-03-15)
+
+
+### Features
+
+* DX improvements — health extended output, list-sessions, description polish, export lastN, reply historyTruncated, setup self-test ([#78](https://github.com/guibarscevicius/gemini-cli-mcp/issues/78)) ([e4a4c89](https://github.com/guibarscevicius/gemini-cli-mcp/commit/e4a4c8915e371dd43f3c22b7f641c338ed5870a8))
+* gemini-research tool + MCP elicitation for missing cwd ([#76](https://github.com/guibarscevicius/gemini-cli-mcp/issues/76)) ([8e6d39a](https://github.com/guibarscevicius/gemini-cli-mcp/commit/8e6d39a41003f01cd376fd2d46c7af5124e68dfd))
+
 ## [0.5.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.4.1...gemini-cli-mcp-v0.5.0) (2026-03-14)
 
 
