@@ -15,13 +15,13 @@ export const AskGeminiSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default."),
+    .describe("Gemini model to use (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview). Defaults to CLI default."),
   cwd: z
     .string()
     .min(1)
     .optional()
     .describe(
-      "Working directory for the Gemini subprocess. Required for any @file path — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected."
+      "Required when the prompt contains 2 or more @file references. A single @file ref is resolved by the CLI without cwd. If cwd is omitted with 2+ @file refs and the client supports elicitation, you will be prompted to provide it."
     ),
   wait: z
     .boolean()
@@ -32,7 +32,7 @@ export const AskGeminiSchema = z.object({
     .int()
     .positive()
     .optional()
-    .describe("Timeout for wait mode in ms (default 90000). Falls back to async on timeout."),
+    .describe("Timeout for wait mode in ms (default 90000). On timeout, returns timedOut: true with partialResponse; the job continues running and can be polled with gemini-poll."),
   expandRefs: z
     .boolean()
     .optional()
@@ -159,12 +159,12 @@ export const askGeminiToolDefinition: Tool = {
       model: {
         type: "string",
         description:
-          "Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default.",
+          "Gemini model to use (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview). Defaults to CLI default.",
       },
       cwd: {
         type: "string",
         description:
-          "Working directory for the subprocess. Required for any @file path (relative or absolute) — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected.",
+          "Required when the prompt contains 2 or more @file references. A single @file ref is resolved by the CLI without cwd. If cwd is omitted with 2+ @file refs and the client supports elicitation, you will be prompted to provide it.",
       },
       wait: {
         type: "boolean",
@@ -174,7 +174,7 @@ export const askGeminiToolDefinition: Tool = {
       waitTimeoutMs: {
         type: "number",
         description:
-          "Timeout for wait mode in ms (default 90000). Falls back to async on timeout.",
+          "Timeout for wait mode in ms (default 90000). On timeout, returns timedOut: true with partialResponse; the job continues running and can be polled with gemini-poll.",
       },
       expandRefs: {
         type: "boolean",

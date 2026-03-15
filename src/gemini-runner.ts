@@ -186,18 +186,6 @@ if (POOL_ENABLED && !SETUP_MODE) {
   );
 }
 
-export function getServerStats() {
-  return {
-    semaphore: semaphore.stats(),
-    pool: {
-      enabled: POOL_ENABLED,
-      ready: warmPool?.readyCount ?? 0,
-      size: warmPool?.size ?? 0,
-    },
-    maxConcurrent: MAX_CONCURRENT,
-  };
-}
-
 const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES ?? "3", 10);
 const RETRY_BASE_MS = parseInt(process.env.GEMINI_RETRY_BASE_MS ?? "1000", 10);
 
@@ -208,6 +196,71 @@ if (CACHE_TTL_MS < 0 || !Number.isFinite(CACHE_TTL_MS)) {
 const CACHE_MAX_ENTRIES = Math.trunc(Number(process.env.GEMINI_CACHE_MAX_ENTRIES ?? "50"));
 if (CACHE_MAX_ENTRIES < 1 || !Number.isFinite(CACHE_MAX_ENTRIES)) {
   throw new Error("GEMINI_CACHE_MAX_ENTRIES must be a positive integer");
+}
+
+const DEFAULT_SESSION_DB = nodePath.join(os.homedir(), ".gemini-cli-mcp", "sessions.db");
+
+function parseIntOverride(key: string, defaultValue: number): number | string | undefined {
+  const raw = process.env[key];
+  if (raw === undefined) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  const value: number | string = Number.isFinite(parsed) ? parsed : raw;
+  return value === defaultValue ? undefined : value;
+}
+
+export function getEnvOverrides(): Record<string, unknown> {
+  const overrides: Record<string, unknown> = {};
+
+  if (MAX_CONCURRENT !== 2) overrides.GEMINI_MAX_CONCURRENT = MAX_CONCURRENT;
+  const maxRetriesOverride = parseIntOverride("GEMINI_MAX_RETRIES", 3);
+  if (maxRetriesOverride !== undefined) overrides.GEMINI_MAX_RETRIES = maxRetriesOverride;
+  const retryBaseOverride = parseIntOverride("GEMINI_RETRY_BASE_MS", 1000);
+  if (retryBaseOverride !== undefined) overrides.GEMINI_RETRY_BASE_MS = retryBaseOverride;
+  const queueTimeoutOverride = parseIntOverride("GEMINI_QUEUE_TIMEOUT_MS", 60000);
+  if (queueTimeoutOverride !== undefined) overrides.GEMINI_QUEUE_TIMEOUT_MS = queueTimeoutOverride;
+
+  if (process.env.GEMINI_POOL_ENABLED !== undefined && POOL_ENABLED !== true) {
+    overrides.GEMINI_POOL_ENABLED = POOL_ENABLED;
+  }
+  if (process.env.GEMINI_POOL_SIZE !== undefined) {
+    const effectivePoolSize = Number.isFinite(POOL_SIZE) && POOL_SIZE >= 1 ? POOL_SIZE : MAX_CONCURRENT;
+    if (effectivePoolSize !== MAX_CONCURRENT) {
+      overrides.GEMINI_POOL_SIZE = effectivePoolSize;
+    }
+  }
+  const poolStartupOverride = parseIntOverride("GEMINI_POOL_STARTUP_MS", 12000);
+  if (poolStartupOverride !== undefined) overrides.GEMINI_POOL_STARTUP_MS = poolStartupOverride;
+
+  if (CACHE_TTL_MS !== 300000) overrides.GEMINI_CACHE_TTL_MS = CACHE_TTL_MS;
+  if (CACHE_MAX_ENTRIES !== 50) overrides.GEMINI_CACHE_MAX_ENTRIES = CACHE_MAX_ENTRIES;
+
+  const maxHistoryOverride = parseIntOverride("GEMINI_MAX_HISTORY_TURNS", 20);
+  if (maxHistoryOverride !== undefined) overrides.GEMINI_MAX_HISTORY_TURNS = maxHistoryOverride;
+  const jobTtlOverride = parseIntOverride("GEMINI_JOB_TTL_MS", 300000);
+  if (jobTtlOverride !== undefined) overrides.GEMINI_JOB_TTL_MS = jobTtlOverride;
+  const jobGcOverride = parseIntOverride("GEMINI_JOB_GC_MS", 60000);
+  if (jobGcOverride !== undefined) overrides.GEMINI_JOB_GC_MS = jobGcOverride;
+
+  const sessionDb = process.env.GEMINI_SESSION_DB ?? DEFAULT_SESSION_DB;
+  if (sessionDb !== DEFAULT_SESSION_DB) overrides.GEMINI_SESSION_DB = sessionDb;
+
+  if (process.env.GEMINI_BINARY) overrides.GEMINI_BINARY = process.env.GEMINI_BINARY;
+
+  return overrides;
+}
+
+export function getServerStats() {
+  return {
+    semaphore: semaphore.stats(),
+    pool: {
+      enabled: POOL_ENABLED,
+      ready: warmPool?.readyCount ?? 0,
+      size: warmPool?.size ?? 0,
+      lastError: warmPool?.lastError ?? null,
+      consecutiveFailures: warmPool?.consecutiveFailures ?? 0,
+    },
+    maxConcurrent: MAX_CONCURRENT,
+  };
 }
 
 interface CacheEntry { response: string; expiresAt: number; }

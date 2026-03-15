@@ -39,6 +39,7 @@ describe("tool annotations", () => {
     ]);
     expect((geminiHealthToolDefinition.outputSchema as { required: string[] }).required).toEqual([
       "binary",
+      "env",
       "pool",
       "concurrency",
       "jobs",
@@ -104,7 +105,7 @@ describe("tool annotations", () => {
       expect(geminiCancelToolDefinition.annotations).toEqual({
         title: "Cancel Gemini Job",
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: true,
         openWorldHint: false,
       });

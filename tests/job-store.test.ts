@@ -75,6 +75,12 @@ describe("getJobStats", () => {
     const stats = getJobStats();
     expect(stats.active).toBe(1);
     expect(stats.total).toBe(3);
+    expect(stats.byStatus).toEqual({
+      pending: 1,
+      done: 1,
+      error: 1,
+      cancelled: 0,
+    });
   });
 });
 

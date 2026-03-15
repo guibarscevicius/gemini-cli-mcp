@@ -62,12 +62,13 @@ describe("notifications/cancelled handler logic", () => {
       return;
     }
     const job = getJob(jobId);
+    if ((job as any)?.status === "pending") {
+      if ((job as any).subprocess === undefined) {
+        cancelJob(jobId);
+      }
+    }
     if (job && job.status !== "pending") {
       process.stderr.write(`[gemini-cli-mcp] notifications/cancelled: job ${jobId} already ${job.status} - skipping kill\n`);
-    }
-    if ((job as any)?.status === "pending") {
-      (job as any).subprocess?.kill("SIGTERM");
-      cancelJob(jobId);
     }
     unregisterRequest(requestId);
   }
@@ -85,13 +86,13 @@ describe("notifications/cancelled handler logic", () => {
     expect(mockCancelJob).not.toHaveBeenCalled();
   });
 
-  it("kills subprocess and cancels pending job", async () => {
+  it("does not cancel a running pending job (subprocess already assigned)", async () => {
     const kill = vi.fn();
     mockGetJobByRequestId.mockReturnValue("job-abc");
     mockGetJob.mockReturnValue({ status: "pending", subprocess: { kill } } as any);
     await runCancellationHandler("req-1");
-    expect(kill).toHaveBeenCalledWith("SIGTERM");
-    expect(mockCancelJob).toHaveBeenCalledWith("job-abc");
+    expect(kill).not.toHaveBeenCalled();
+    expect(mockCancelJob).not.toHaveBeenCalled();
     expect(mockUnregisterRequest).toHaveBeenCalledWith("req-1");
   });
 
@@ -114,8 +115,9 @@ describe("notifications/cancelled handler logic", () => {
 
   it("unregisters numeric requestId", async () => {
     mockGetJobByRequestId.mockReturnValue("job-xyz");
-    mockGetJob.mockReturnValue({ status: "pending", subprocess: { kill: vi.fn() } } as any);
+    mockGetJob.mockReturnValue({ status: "pending", subprocess: undefined } as any);
     await runCancellationHandler(99);
+    expect(mockCancelJob).toHaveBeenCalledWith("job-xyz");
     expect(mockUnregisterRequest).toHaveBeenCalledWith(99);
   });
 });

@@ -15,6 +15,203 @@ function print(msg: string): void {
   process.stdout.write(msg + "\n");
 }
 
+function resolveServerEntry(): string {
+  const setupUrl = new URL(import.meta.url);
+  setupUrl.search = "";
+  setupUrl.hash = "";
+  const setupFile = fileURLToPath(setupUrl);
+  const packageRoot = nodePath.resolve(setupFile, "../..");
+  return nodePath.join(packageRoot, "dist", "index.js");
+}
+
+function createLineReader(cp: ReturnType<typeof spawn>) {
+  let buffer = "";
+  const lines: string[] = [];
+  const waiters: Array<{
+    needle: string;
+    resolve: (line: string) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }> = [];
+  let terminalError: Error | null = null;
+
+  const resolveWaiters = () => {
+    for (let i = 0; i < waiters.length; i++) {
+      const waiter = waiters[i]!;
+      const lineIdx = lines.findIndex((line) => line.includes(waiter.needle));
+      if (lineIdx === -1) continue;
+      const [line] = lines.splice(lineIdx, 1);
+      if (line === undefined) continue;
+      clearTimeout(waiter.timer);
+      waiters.splice(i, 1);
+      i--;
+      waiter.resolve(line);
+    }
+  };
+
+  const failAll = (err: Error) => {
+    if (terminalError !== null) return;
+    terminalError = err;
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(err);
+    }
+    waiters.length = 0;
+  };
+
+  cp.stdout?.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString();
+    let newline = buffer.indexOf("\n");
+    while (newline !== -1) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (line.length > 0) lines.push(line);
+      newline = buffer.indexOf("\n");
+    }
+    resolveWaiters();
+  });
+
+  cp.on("error", (err) => {
+    failAll(err instanceof Error ? err : new Error(String(err)));
+  });
+  cp.on("close", (code) => {
+    failAll(new Error(`server exited before expected response (code ${code ?? "unknown"})`));
+  });
+
+  const waitForLineContaining = (needle: string, timeoutMs: number): Promise<string> => {
+    if (terminalError !== null) {
+      return Promise.reject(terminalError);
+    }
+    const lineIdx = lines.findIndex((line) => line.includes(needle));
+    if (lineIdx !== -1) {
+      const line = lines.splice(lineIdx, 1)[0]!;
+      return Promise.resolve(line);
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = waiters.findIndex((w) => w.timer === timer);
+        if (idx !== -1) waiters.splice(idx, 1);
+        reject(new Error(`timed out after ${timeoutMs}ms waiting for response containing ${needle}`));
+      }, timeoutMs);
+      if (timer.unref) timer.unref();
+      waiters.push({ needle, resolve, reject, timer });
+    });
+  };
+
+  return { waitForLineContaining };
+}
+
+export async function runServerSelfTest(entry: string, binary: string): Promise<{
+  binary: string;
+  poolReady: number;
+  poolSize: number;
+  version: string;
+}> {
+  const cp = spawn(process.execPath, [entry], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, GEMINI_BINARY: binary },
+  });
+  const reader = createLineReader(cp);
+
+  try {
+    if (!cp.stdin) {
+      throw new Error("self-test: server process stdin not available");
+    }
+    cp.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "gemini-cli-mcp-setup", version: "1.0.0" },
+        },
+      })}\n`
+    );
+    const initLine = await reader.waitForLineContaining("\"id\":1", 15_000);
+    try {
+      const initResponse = JSON.parse(initLine) as {
+        error?: { code: number; message: string };
+        result?: unknown;
+      };
+      if (initResponse.error) {
+        throw new Error(`self-test: initialize failed: ${initResponse.error.message}`);
+      }
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        throw new Error(`self-test: server returned non-JSON initialize response: ${initLine.slice(0, 200)}`);
+      }
+      throw err;
+    }
+
+    cp.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })}\n`
+    );
+    cp.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "gemini-health", arguments: {} },
+      })}\n`
+    );
+
+    const responseLine = await reader.waitForLineContaining("\"id\":2", 30_000);
+    let response: {
+      result?: { content?: Array<{ text?: string }> };
+      error?: { code: number; message: string };
+    };
+    try {
+      response = JSON.parse(responseLine) as {
+        result?: { content?: Array<{ text?: string }> };
+        error?: { code: number; message: string };
+      };
+    } catch {
+      throw new Error(`self-test: server returned non-JSON response: ${responseLine.slice(0, 200)}`);
+    }
+    if ("error" in response && response.error) {
+      throw new Error(`self-test: server returned JSON-RPC error: ${JSON.stringify(response.error)}`);
+    }
+    const text = response.result?.content?.[0]?.text;
+    if (typeof text !== "string") {
+      throw new Error("gemini-health response missing result.content[0].text");
+    }
+    let health: {
+      binary?: { path?: string | null };
+      pool?: { ready?: number; size?: number };
+      server?: { version?: string };
+    };
+    try {
+      health = JSON.parse(text) as {
+        binary?: { path?: string | null };
+        pool?: { ready?: number; size?: number };
+        server?: { version?: string };
+      };
+    } catch {
+      return {
+        binary,
+        poolReady: 0,
+        poolSize: 0,
+        version: "unknown",
+      };
+    }
+    return {
+      binary: health.binary?.path ?? binary,
+      poolReady: health.pool?.ready ?? 0,
+      poolSize: health.pool?.size ?? 0,
+      version: health.server?.version ?? "unknown",
+    };
+  } finally {
+    try {
+      if (cp.exitCode === null) cp.kill("SIGTERM");
+    } catch {
+      // SIGTERM on an already-exited process throws — safe to ignore
+    }
+  }
+}
+
 async function installGeminiCli(): Promise<void> {
   print(`\n${YELLOW}Installing @google/gemini-cli...${RESET}`);
   await new Promise<void>((resolve, reject) => {
@@ -87,7 +284,7 @@ export async function runSetup(): Promise<void> {
   print(`\n${BOLD}${CYAN}gemini-cli-mcp setup wizard${RESET}\n`);
 
   // Step 1: Find gemini binary
-  print("Step 1/3: Locating gemini binary...");
+  print("Step 1/4: Locating gemini binary...");
   let binary = discoverGeminiBinary();
   // binary !== "gemini" means auto-discovery found an absolute path — we know it exists.
   // If it returned the fallback "gemini", we must check PATH explicitly via which/where below.
@@ -154,7 +351,7 @@ export async function runSetup(): Promise<void> {
   }
 
   // Step 2: Check authentication
-  print("\nStep 2/3: Checking Gemini authentication...");
+  print("\nStep 2/4: Checking Gemini authentication...");
   const authStatus = await checkAuth(binary);
   if (authStatus === "ok") {
     print(`  ${GREEN}✓${RESET} Authenticated`);
@@ -168,7 +365,7 @@ export async function runSetup(): Promise<void> {
   }
 
   // Step 3: Output MCP config
-  print("\nStep 3/3: Generating MCP config...\n");
+  print("\nStep 3/4: Generating MCP config...\n");
 
   const npx = isNpxRun();
 
@@ -177,9 +374,7 @@ export async function runSetup(): Promise<void> {
     print(`  npm install -g @guibarscevicius/gemini-cli-mcp\n`);
   }
 
-  const __filename = fileURLToPath(import.meta.url);
-  const packageRoot = nodePath.resolve(__filename, "../.."); // setup.ts compiles to dist/setup.js, go up to package root
-  const scriptPath = nodePath.join(packageRoot, "dist", "index.js");
+  const scriptPath = resolveServerEntry();
 
   const config = {
     gemini: {
@@ -193,5 +388,15 @@ export async function runSetup(): Promise<void> {
 
   print(`${BOLD}Paste this into your ~/.mcp.json:${RESET}\n`);
   print(JSON.stringify(config, null, 2));
+  print("\nStep 4 — Testing server configuration");
+  try {
+    const selfTest = await runServerSelfTest(scriptPath, binary);
+    print(
+      `  ${GREEN}✓${RESET} Server responded — binary: ${selfTest.binary}, pool: ` +
+      `${selfTest.poolReady}/${selfTest.poolSize} ready, version: ${selfTest.version}`
+    );
+  } catch (err) {
+    print(`  ${RED}✗${RESET} Self-test failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   print(`\n${GREEN}${BOLD}Setup complete!${RESET}`);
 }

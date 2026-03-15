@@ -104,6 +104,12 @@ describe("WarmProcessPool", () => {
     expect(pool.size).toBe(5);
   });
 
+  it("lastError is null and consecutiveFailures starts at 0", () => {
+    const pool = new WarmProcessPool(1, [], {});
+    expect(pool.lastError).toBeNull();
+    expect(pool.consecutiveFailures).toBe(0);
+  });
+
   // ── acquire / release ─────────────────────────────────────────────────────
 
   it("acquire() returns a ready process immediately", async () => {
@@ -178,6 +184,7 @@ describe("WarmProcessPool", () => {
     // Pool should have replenished
     expect(spawnCalls).toHaveLength(2);
     expect(pool.readyCount).toBe(1);
+    expect(pool.lastError).toBe("spawn error");
   });
 
   it("process that exits unexpectedly is removed and a replacement is spawned", async () => {
@@ -410,6 +417,34 @@ describe("WarmProcessPool ENOENT backoff", () => {
 
     // Pool spawns 1 initially, then replenishes up to MAX_CONSECUTIVE_FAILURES times = 5 total
     expect(tracker.count).toBe(5);
+    expect(pool.consecutiveFailures).toBe(5);
+
+    await pool.drain();
+  });
+
+  it("resets consecutiveFailures after a successful replacement is acquired", async () => {
+    spawnCalls.length = 0;
+    let spawnCount = 0;
+    const { spawn: mockSpawn } = await import("node:child_process");
+    vi.mocked(mockSpawn).mockImplementation(() => {
+      spawnCount++;
+      const cp = makeMockCp(spawnCount);
+      spawnCalls.push(cp);
+      if (spawnCount <= 2) {
+        setImmediate(() => {
+          const err = Object.assign(new Error("spawn gemini ENOENT"), { code: "ENOENT" });
+          cp.emit("error", err);
+        });
+      }
+      return cp as ReturnType<typeof import("node:child_process").spawn>;
+    });
+
+    const pool = new WarmProcessPool(1, ["--yolo"], { HOME: "/home/test", PATH: "/usr/bin" }, 0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(pool.consecutiveFailures).toBe(2);
+
+    await pool.acquire();
+    expect(pool.consecutiveFailures).toBe(0);
 
     await pool.drain();
   });

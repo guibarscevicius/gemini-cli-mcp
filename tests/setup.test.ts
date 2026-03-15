@@ -23,6 +23,130 @@ function mockChildProcess(overrides: Partial<{
   } as Partial<ChildProcess>;
 }
 
+function mockSelfTestSpawn(initLine: string, responseLine?: string): void {
+  vi.doMock("node:child_process", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("node:child_process")>();
+    const mockSpawn = vi.fn().mockImplementation(() => {
+      const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+      const stdoutHandlers: Array<(data: Buffer) => void> = [];
+      const cp = mockChildProcess({
+        stdout: {
+          on: vi.fn((evt: string, cb: (data: Buffer) => void) => {
+            if (evt === "data") stdoutHandlers.push(cb);
+          }),
+        } as unknown as NodeJS.ReadableStream,
+        stdin: {
+          end: vi.fn(),
+          write: vi.fn((s: string) => {
+            if (s.includes("\"id\":1")) {
+              stdoutHandlers.forEach((cb) => cb(Buffer.from(`${initLine}\n`)));
+            }
+            if (responseLine !== undefined && s.includes("\"id\":2")) {
+              stdoutHandlers.forEach((cb) => cb(Buffer.from(`${responseLine}\n`)));
+            }
+          }),
+        } as unknown as NodeJS.WritableStream,
+      });
+      (cp.on as ReturnType<typeof vi.fn>).mockImplementation((evt: string, cb: (...a: unknown[]) => void) => {
+        handlers[evt] = handlers[evt] ?? [];
+        handlers[evt].push(cb);
+      });
+      (cp.kill as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        (cp as { exitCode: number | null }).exitCode = 0;
+        handlers.close?.forEach((cb) => cb(0, null));
+      });
+      return cp;
+    });
+    return { ...actual, spawn: mockSpawn };
+  });
+}
+
+describe("runServerSelfTest", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock("../src/gemini-runner.js");
+    vi.doUnmock("node:child_process");
+  });
+
+  it("returns parsed binary/pool/version on happy path", async () => {
+    vi.doMock("../src/gemini-runner.js", () => ({
+      discoverGeminiBinary: vi.fn().mockReturnValue("/usr/bin/gemini"),
+    }));
+
+    const healthPayload = {
+      binary: { path: "/usr/bin/gemini" },
+      pool: { ready: 1, size: 2 },
+      server: { version: "1.0.0" },
+    };
+    mockSelfTestSpawn(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        result: { content: [{ text: JSON.stringify(healthPayload) }] },
+      })
+    );
+
+    const { runServerSelfTest } = await import("../src/setup.js");
+    await expect(runServerSelfTest("/tmp/server.js", "/usr/bin/gemini")).resolves.toEqual({
+      binary: "/usr/bin/gemini",
+      poolReady: 1,
+      poolSize: 2,
+      version: "1.0.0",
+    });
+  });
+
+  it("surfaces JSON-RPC errors from tools/call", async () => {
+    vi.doMock("../src/gemini-runner.js", () => ({
+      discoverGeminiBinary: vi.fn().mockReturnValue("/usr/bin/gemini"),
+    }));
+    mockSelfTestSpawn(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        error: { code: -32601, message: "Method not found" },
+      })
+    );
+
+    const { runServerSelfTest } = await import("../src/setup.js");
+    await expect(runServerSelfTest("/tmp/server.js", "/usr/bin/gemini")).rejects.toThrow("Method not found");
+  });
+
+  it("throws a contextual error for non-JSON tools/call responses", async () => {
+    vi.doMock("../src/gemini-runner.js", () => ({
+      discoverGeminiBinary: vi.fn().mockReturnValue("/usr/bin/gemini"),
+    }));
+    mockSelfTestSpawn(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      "{\"id\":2"
+    );
+
+    const { runServerSelfTest } = await import("../src/setup.js");
+    await expect(runServerSelfTest("/tmp/server.js", "/usr/bin/gemini")).rejects.toThrow("non-JSON response");
+  });
+
+  it("fails fast when initialize returns a JSON-RPC error", async () => {
+    vi.doMock("../src/gemini-runner.js", () => ({
+      discoverGeminiBinary: vi.fn().mockReturnValue("/usr/bin/gemini"),
+    }));
+    mockSelfTestSpawn(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32000, message: "init failed" },
+      })
+    );
+
+    const { runServerSelfTest } = await import("../src/setup.js");
+    await expect(runServerSelfTest("/tmp/server.js", "/usr/bin/gemini")).rejects.toThrow("initialize failed");
+  });
+});
+
 describe("runSetup", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -62,6 +186,10 @@ describe("runSetup", () => {
         if (args.includes("--prompt")) {
           setTimeout(() => {
             handlers["close"]?.forEach((cb) => cb(0, null));
+          }, 10);
+        } else {
+          setTimeout(() => {
+            handlers["close"]?.forEach((cb) => cb(1, null));
           }, 10);
         }
         return cp;
@@ -219,9 +347,18 @@ describe("runSetup", () => {
     });
     vi.doMock("node:child_process", async (importOriginal) => {
       const actual = await importOriginal<typeof import("node:child_process")>();
-      const mockSpawn = vi.fn().mockImplementation(() => {
-        // Never closes — will trigger timeout
-        return mockChildProcess();
+      const mockSpawn = vi.fn().mockImplementation((_cmd: string, args: string[]) => {
+        const cp = mockChildProcess();
+        const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+        (cp.on as ReturnType<typeof vi.fn>).mockImplementation((evt: string, cb: (...a: unknown[]) => void) => {
+          handlers[evt] = handlers[evt] ?? [];
+          handlers[evt].push(cb);
+        });
+        if (!args.includes("--prompt")) {
+          setTimeout(() => handlers["close"]?.forEach((cb) => cb(1, null)), 10);
+        }
+        // Auth check process never closes — will trigger timeout.
+        return cp;
       });
       return { ...actual, spawn: mockSpawn };
     });

@@ -22,6 +22,7 @@ import { geminiReplyToolDefinition } from "./tools/gemini-reply.js";
 import { geminiPollToolDefinition } from "./tools/gemini-poll.js";
 import { geminiCancelToolDefinition } from "./tools/gemini-cancel.js";
 import { geminiHealthToolDefinition } from "./tools/gemini-health.js";
+import { geminiListSessionsToolDefinition } from "./tools/gemini-list-sessions.js";
 import { geminiExportToolDefinition } from "./tools/gemini-export.js";
 import { geminiBatchToolDefinition } from "./tools/gemini-batch.js";
 import { geminiResearchToolDefinition } from "./tools/gemini-research.js";
@@ -47,6 +48,7 @@ export function registerToolHandlers(server: ToolServer): void {
       geminiPollToolDefinition,
       geminiCancelToolDefinition,
       geminiHealthToolDefinition,
+      geminiListSessionsToolDefinition,
       geminiExportToolDefinition,
       geminiBatchToolDefinition,
       geminiResearchToolDefinition,
@@ -140,8 +142,9 @@ export function createServer(): Server {
     }
     const job = jobStore.getJob(jobId);
     if (job?.status === "pending") {
-      job.subprocess?.kill("SIGTERM");
-      jobStore.cancelJob(jobId);
+      if (job.subprocess === undefined) {
+        jobStore.cancelJob(jobId);
+      }
     }
     if (job && job.status !== "pending") {
       process.stderr.write(`[gemini-cli-mcp] notifications/cancelled: job ${jobId} already ${job.status} — skipping kill\n`);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { Turn } from "../../src/session-store.js";
 
 const sessionStoreMock = vi.hoisted(() => ({
@@ -16,6 +16,13 @@ import { handleCallTool } from "../../src/dispatcher.js";
 const SAMPLE_TURNS = [
   { role: "user", content: "What is the capital of France?" },
   { role: "assistant", content: "The capital of France is Paris." },
+];
+
+const FOUR_TURNS: Turn[] = [
+  { role: "user", content: "u1" },
+  { role: "assistant", content: "a1" },
+  { role: "user", content: "u2" },
+  { role: "assistant", content: "a2" },
 ];
 
 beforeEach(() => {
@@ -94,6 +101,37 @@ describe("geminiExport — default format", () => {
   });
 });
 
+describe("geminiExport — lastN", () => {
+  it("lastN: 2 exports only the last two turns from a four-turn session", async () => {
+    sessionStoreMock.getTurns.mockReturnValue(FOUR_TURNS);
+    const result = await geminiExport({ sessionId: "sess-1", lastN: 2 });
+
+    expect(result.lastN).toBe(2);
+    expect(result.turnCount).toBe(2);
+    expect(result.totalTurnCount).toBe(4);
+    expect(result.turns).toEqual(FOUR_TURNS.slice(-2));
+    expect(JSON.parse(result.content)).toEqual(FOUR_TURNS.slice(-2));
+  });
+
+  it("lastN larger than session length exports all turns", async () => {
+    sessionStoreMock.getTurns.mockReturnValue(FOUR_TURNS);
+    const result = await geminiExport({ sessionId: "sess-1", lastN: 10 });
+
+    expect(result.turnCount).toBe(4);
+    expect(result.totalTurnCount).toBe(4);
+    expect(result.turns).toEqual(FOUR_TURNS);
+  });
+
+  it("when lastN is omitted, exports full history", async () => {
+    sessionStoreMock.getTurns.mockReturnValue(FOUR_TURNS);
+    const result = await geminiExport({ sessionId: "sess-1" });
+
+    expect(result.lastN).toBeUndefined();
+    expect(result.turnCount).toBe(4);
+    expect(result.turns).toEqual(FOUR_TURNS);
+  });
+});
+
 describe("geminiExport — empty session", () => {
   it("returns turnCount 0, empty turns, and empty JSON array", async () => {
     sessionStoreMock.getTurns.mockReturnValue([]);
@@ -133,6 +171,24 @@ describe("geminiExport — error cases", () => {
     await expect(
       handleCallTool("gemini-export", {})
     ).rejects.toMatchObject({
+      message: expect.stringContaining("Invalid arguments"),
+    });
+  });
+
+  it("throws McpError(InvalidParams) when lastN is 0", async () => {
+    await expect(
+      handleCallTool("gemini-export", { sessionId: "sess-1", lastN: 0 })
+    ).rejects.toMatchObject({
+      code: ErrorCode.InvalidParams,
+      message: expect.stringContaining("Invalid arguments"),
+    });
+  });
+
+  it("throws McpError(InvalidParams) when lastN is negative", async () => {
+    await expect(
+      handleCallTool("gemini-export", { sessionId: "sess-1", lastN: -1 })
+    ).rejects.toMatchObject({
+      code: ErrorCode.InvalidParams,
       message: expect.stringContaining("Invalid arguments"),
     });
   });

@@ -60,7 +60,7 @@ export const geminiCancelToolDefinition: Tool = {
   annotations: {
     title: "Cancel Gemini Job",
     readOnlyHint: false,
-    destructiveHint: false,
+    destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
   },

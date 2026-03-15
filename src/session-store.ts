@@ -14,6 +14,12 @@ export interface Turn {
   content: string;
 }
 
+export interface FormattedHistory {
+  history: string;
+  truncated: boolean;
+  totalTurns: number;
+}
+
 export class SessionStore {
   private db: DatabaseSync;
   private gcTimer: ReturnType<typeof setInterval>;
@@ -61,7 +67,7 @@ export class SessionStore {
     this.stmtGcDelete = this.db.prepare("DELETE FROM sessions WHERE last_accessed < ?");
     this.stmtCount = this.db.prepare("SELECT COUNT(*) as n FROM sessions");
     this.stmtListSessions = this.db.prepare(
-      "SELECT id, last_accessed, json_array_length(turns) as turn_count FROM sessions ORDER BY last_accessed DESC"
+      "SELECT id, last_accessed, CASE WHEN json_valid(turns) THEN COALESCE(json_array_length(turns), 0) ELSE 0 END as turn_count FROM sessions ORDER BY last_accessed DESC"
     );
     this.stmtGetMeta = this.db.prepare(
       "SELECT last_accessed, turns FROM sessions WHERE id = ?"
@@ -139,13 +145,21 @@ export class SessionStore {
     }
   }
 
-  formatHistory(id: string): string {
+  formatHistory(id: string): FormattedHistory {
     const row = this.stmtGetTurns.get(id) as { turns: string } | undefined;
-    if (!row) return "";
-    const allTurns: Turn[] = JSON.parse(row.turns);
-    if (allTurns.length === 0) return "";
+    if (!row) return { history: "", truncated: false, totalTurns: 0 };
+    let allTurns: Turn[];
+    try {
+      allTurns = JSON.parse(row.turns) as Turn[];
+    } catch (err) {
+      process.stderr.write(
+        `[gemini-cli-mcp] formatHistory: session ${id} has corrupt turn data: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      return { history: "", truncated: false, totalTurns: 0 };
+    }
+    if (allTurns.length === 0) return { history: "", truncated: false, totalTurns: 0 };
 
-    const maxPairs = parseInt(process.env.GEMINI_MAX_HISTORY_TURNS ?? "20");
+    const maxPairs = parseInt(process.env.GEMINI_MAX_HISTORY_TURNS ?? "20", 10);
     const limit = maxPairs > 0 ? maxPairs * 2 : Infinity;
     const truncated = isFinite(limit) && allTurns.length > limit;
     const turns = isFinite(limit) ? allTurns.slice(-limit) : allTurns;
@@ -158,7 +172,7 @@ export class SessionStore {
       lines.push(`${turn.role === "user" ? "User" : "Assistant"}: ${turn.content}`);
     }
     lines.push("[End of history — continue the conversation]");
-    return lines.join("\n");
+    return { history: lines.join("\n"), truncated, totalTurns: allTurns.length };
   }
 
   getSessionCount(): number {
