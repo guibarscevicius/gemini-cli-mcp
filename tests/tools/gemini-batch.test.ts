@@ -5,6 +5,7 @@ import { ZodError } from "zod";
 vi.mock("../../src/gemini-runner.js", () => ({
   runGemini: vi.fn(),
   spawnGemini: vi.fn(),
+  countFileRefs: vi.fn(() => 0),
   SemaphoreTimeoutError: class SemaphoreTimeoutError extends Error {
     constructor(timeoutMs: number) {
       super(`Gemini request timed out after ${timeoutMs}ms waiting for a concurrency slot`);
@@ -24,15 +25,19 @@ vi.mock("../../src/job-store.js", () => ({
 
 vi.mock("../../src/tools/shared.js", () => ({
   runGeminiAsync: vi.fn(),
+  elicitCwdIfNeeded: vi.fn(),
 }));
 
 import * as jobStore from "../../src/job-store.js";
-import { runGeminiAsync } from "../../src/tools/shared.js";
+import { countFileRefs } from "../../src/gemini-runner.js";
+import { runGeminiAsync, elicitCwdIfNeeded } from "../../src/tools/shared.js";
 import { geminiBatch } from "../../src/tools/gemini-batch.js";
 import type { GeminiBatchSyncOutput, GeminiBatchAsyncOutput } from "../../src/tools/gemini-batch.js";
 
 const mockJobStore = vi.mocked(jobStore);
+const mockCountFileRefs = vi.mocked(countFileRefs);
 const mockRunGeminiAsync = vi.mocked(runGeminiAsync);
+const mockElicitCwdIfNeeded = vi.mocked(elicitCwdIfNeeded);
 
 // Drain the microtask queue so fire-and-forget .then() callbacks run
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -57,6 +62,8 @@ function makeJob(outcome: string | Error) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockCountFileRefs.mockReturnValue(0);
+  mockElicitCwdIfNeeded.mockImplementation(async (_prompt, cwd) => cwd);
   mockRunGeminiAsync.mockResolvedValue("gemini response");
   mockJobStore.getJob.mockImplementation(() => makeJob("gemini response"));
 });

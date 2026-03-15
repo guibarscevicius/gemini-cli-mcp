@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError } from "zod";
 
 vi.mock("../../src/gemini-runner.js", () => ({
   runGemini: vi.fn(),
   spawnGemini: vi.fn(),
+  countFileRefs: vi.fn(() => 0),
   SemaphoreTimeoutError: class SemaphoreTimeoutError extends Error {
     constructor(timeoutMs: number) {
       super(`Gemini request timed out after ${timeoutMs}ms waiting for a concurrency slot`);
@@ -42,17 +43,27 @@ vi.mock("../../src/request-map.js", () => ({
   clearMap: vi.fn(),
 }));
 
-import { runGemini } from "../../src/gemini-runner.js";
+vi.mock("../../src/tools/shared.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/tools/shared.js")>("../../src/tools/shared.js");
+  return {
+    ...actual,
+    elicitCwdIfNeeded: vi.fn(actual.elicitCwdIfNeeded),
+  };
+});
+
+import { runGemini, countFileRefs } from "../../src/gemini-runner.js";
 import { sessionStore } from "../../src/session-store.js";
 import * as jobStore from "../../src/job-store.js";
 import { unregisterRequest } from "../../src/request-map.js";
 import { geminiReply } from "../../src/tools/gemini-reply.js";
-import { DEFAULT_WAIT_MS } from "../../src/tools/shared.js";
+import { DEFAULT_WAIT_MS, elicitCwdIfNeeded } from "../../src/tools/shared.js";
 
 const mockRunGemini = vi.mocked(runGemini);
+const mockCountFileRefs = vi.mocked(countFileRefs);
 const mockStore = vi.mocked(sessionStore);
 const mockJobStore = vi.mocked(jobStore);
 const mockUnregisterRequest = vi.mocked(unregisterRequest);
+const mockElicitCwdIfNeeded = vi.mocked(elicitCwdIfNeeded);
 
 const VALID_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -271,6 +282,26 @@ describe("geminiReply", () => {
     await flush();
     const opts = mockRunGemini.mock.calls[0][1];
     expect(opts.expandRefs).toBeUndefined();
+  });
+
+  it("throws McpError when elicitation is cancelled (resolvedCwd === null)", async () => {
+    mockElicitCwdIfNeeded.mockResolvedValueOnce(null);
+    await expect(
+      geminiReply({ sessionId: VALID_SESSION_ID, prompt: "@file1.ts and @file2.ts" }, { elicit: vi.fn() })
+    ).rejects.toThrow(McpError);
+
+    mockElicitCwdIfNeeded.mockResolvedValueOnce(null);
+    await expect(
+      geminiReply({ sessionId: VALID_SESSION_ID, prompt: "@file1.ts and @file2.ts" }, { elicit: vi.fn() })
+    ).rejects.toThrow("cancelled by user");
+  });
+
+  it("throws McpError when elicitation unsupported and multiple @file refs present", async () => {
+    mockElicitCwdIfNeeded.mockResolvedValueOnce(undefined);
+    mockCountFileRefs.mockReturnValueOnce(2);
+    await expect(
+      geminiReply({ sessionId: VALID_SESSION_ID, prompt: "@file1.ts and @file2.ts" }, {})
+    ).rejects.toThrow(McpError);
   });
 
   // ── Input validation (Zod) ───────────────────────────────────────────────────

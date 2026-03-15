@@ -19,6 +19,7 @@ import { geminiCancelToolDefinition } from "../src/tools/gemini-cancel.js";
 import { geminiHealthToolDefinition } from "../src/tools/gemini-health.js";
 import { geminiExportToolDefinition } from "../src/tools/gemini-export.js";
 import { geminiBatchToolDefinition } from "../src/tools/gemini-batch.js";
+import { geminiResearchToolDefinition } from "../src/tools/gemini-research.js";
 
 type RequestHandler = (
   request: { params: Record<string, unknown> },
@@ -43,10 +44,14 @@ describe("index wiring", () => {
         handlers.set(schema, handler as RequestHandler);
         return this;
       },
+      getClientCapabilities() {
+        return undefined;
+      },
+      elicitInput: vi.fn(),
     } as Parameters<typeof registerToolHandlers>[0]);
   });
 
-  it("registers the list-tools handler with all seven tool definitions", async () => {
+  it("registers the list-tools handler with all eight tool definitions", async () => {
     const listTools = handlers.get(ListToolsRequestSchema);
     expect(listTools).toBeDefined();
     await expect(listTools!({ params: {} })).resolves.toEqual({
@@ -58,6 +63,7 @@ describe("index wiring", () => {
         geminiHealthToolDefinition,
         geminiExportToolDefinition,
         geminiBatchToolDefinition,
+        geminiResearchToolDefinition,
       ],
     });
   });
@@ -85,17 +91,52 @@ describe("index wiring", () => {
     expect(mockHandleCallTool).toHaveBeenCalledWith(
       "ask-gemini",
       args,
-      expect.objectContaining({ progressToken: undefined, requestId: undefined })
+      expect.objectContaining({ progressToken: undefined, requestId: undefined, elicit: undefined })
     );
   });
 
-  it("createServer includes logging, resources, and prompts capabilities", () => {
+  it("passes elicit function to ctx when client supports elicitation", async () => {
+    const localHandlers = new Map<unknown, RequestHandler>();
+    const elicitInput = vi.fn();
+
+    registerToolHandlers({
+      setRequestHandler(schema, handler) {
+        localHandlers.set(schema, handler as RequestHandler);
+        return this;
+      },
+      getClientCapabilities() {
+        return { elicitation: {} };
+      },
+      elicitInput,
+    } as Parameters<typeof registerToolHandlers>[0]);
+
+    const callTool = localHandlers.get(CallToolRequestSchema);
+    expect(callTool).toBeDefined();
+    await callTool!(
+      {
+        params: {
+          name: "ask-gemini",
+          arguments: { prompt: "hello" },
+        },
+      },
+      undefined
+    );
+
+    expect(mockHandleCallTool).toHaveBeenCalledWith(
+      "ask-gemini",
+      { prompt: "hello" },
+      expect.objectContaining({ elicit: expect.any(Function) })
+    );
+  });
+
+  it("createServer includes logging, resources, prompts, and elicitation capabilities", () => {
     const server = createServer() as unknown as {
       _capabilities: {
         tools: Record<string, never>;
         logging: Record<string, never>;
         resources: { listChanged: boolean };
         prompts: Record<string, never>;
+        elicitation: Record<string, never>;
       };
     };
     expect(server._capabilities).toEqual({
@@ -103,6 +144,7 @@ describe("index wiring", () => {
       logging: {},
       resources: { listChanged: true },
       prompts: {},
+      elicitation: {},
     });
   });
 

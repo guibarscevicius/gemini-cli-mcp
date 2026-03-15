@@ -6,6 +6,7 @@
  */
 import { ZodError } from "zod";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import type { ElicitRequestFormParams, ElicitResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { askGemini } from "./tools/ask-gemini.js";
 import { geminiReply } from "./tools/gemini-reply.js";
@@ -14,6 +15,7 @@ import { geminiCancel } from "./tools/gemini-cancel.js";
 import { geminiHealth } from "./tools/gemini-health.js";
 import { geminiExport } from "./tools/gemini-export.js";
 import { geminiBatch } from "./tools/gemini-batch.js";
+import { geminiResearch } from "./tools/gemini-research.js";
 import { mcpLog } from "./logging.js";
 
 export interface ToolCallContext {
@@ -27,6 +29,8 @@ export interface ToolCallContext {
    *  mapping so notifications/cancelled can abort the right subprocess. The fire-and-forget
    *  chain (or GC sweep) owns cleanup via unregisterRequest / unregisterByJobId. */
   requestId?: string | number;
+  /** Present only when the connected client advertises elicitation capability. */
+  elicit?: (params: ElicitRequestFormParams) => Promise<ElicitResult>;
 }
 
 export type ToolResponse = {
@@ -105,7 +109,15 @@ export async function handleCallTool(
         }
 
         case "gemini-batch": {
-          const result = await geminiBatch(args);
+          const result = await geminiBatch(args, ctx);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            structuredContent: result as unknown as Record<string, unknown>,
+          };
+        }
+
+        case "gemini-research": {
+          const result = await geminiResearch(args, ctx);
           return {
             content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
             structuredContent: result as unknown as Record<string, unknown>,
