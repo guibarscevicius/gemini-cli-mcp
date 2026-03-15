@@ -16,13 +16,13 @@ export const GeminiReplySchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Gemini model to use. Overrides the model used in the original ask-gemini call."),
+    .describe("Gemini model to use. Overrides the model used in the original ask-gemini call. (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview)"),
   cwd: z
     .string()
     .min(1)
     .optional()
     .describe(
-      "Working directory for the Gemini subprocess. Required for any @file path — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected."
+      "Required when the prompt contains 2 or more @file references. A single @file ref is resolved by the CLI without cwd. If cwd is omitted with 2+ @file refs and the client supports elicitation, you will be prompted to provide it."
     ),
   wait: z
     .boolean()
@@ -48,6 +48,8 @@ export interface GeminiReplyOutput {
   response?: string;
   partialResponse?: string;
   timedOut?: boolean;
+  historyTruncated?: boolean;
+  historyTurnCount?: number;
 }
 
 /**
@@ -96,7 +98,7 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
   }
 
   // Prepend conversation history so Gemini has full context
-  const history = sessionStore.formatHistory(sessionId);
+  const { history, truncated, totalTurns } = sessionStore.formatHistory(sessionId);
   const fullPrompt = history ? `${history}\n\n${prompt}` : prompt;
 
   // Fire-and-forget: background job
@@ -141,9 +143,22 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
         // unregister so a late notifications/cancelled from the MCP
         // client cannot kill the still-running background job
         if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
-        return { jobId, partialResponse: result.partialResponse, timedOut: true, pollIntervalMs: 2000 };
+        return {
+          jobId,
+          partialResponse: result.partialResponse,
+          timedOut: true,
+          pollIntervalMs: 2000,
+          historyTruncated: truncated || undefined,
+          historyTurnCount: truncated ? totalTurns : undefined,
+        };
       }
-      return { jobId, response: result.response, pollIntervalMs: 2000 };
+      return {
+        jobId,
+        response: result.response,
+        pollIntervalMs: 2000,
+        historyTruncated: truncated || undefined,
+        historyTurnCount: truncated ? totalTurns : undefined,
+      };
     } catch (err) {
       // Stop the background onChunk from sending further notifications after the
       // tool call returns. Works because onChunk checks ctx.progressToken before sending.
@@ -155,14 +170,19 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
     }
   }
 
-  return { jobId, pollIntervalMs: 2000 };
+  return {
+    jobId,
+    pollIntervalMs: 2000,
+    historyTruncated: truncated || undefined,
+    historyTurnCount: truncated ? totalTurns : undefined,
+  };
 }
 
 export const geminiReplyToolDefinition: Tool = {
   name: "gemini-reply",
   title: "Continue Gemini Session",
   description:
-    "Continue an existing Gemini conversation. If the MCP client supports progress notifications (progressToken present), blocks and streams partial responses as notifications/progress events, then returns the final response inline. Otherwise returns immediately with { jobId }; poll with gemini-poll. Throws if the session has a pending job.",
+    "Continue an existing Gemini conversation. If the MCP client supports progress notifications (progressToken present), blocks and streams partial responses as notifications/progress events, then returns the final response inline. Otherwise returns immediately with { jobId }; poll with gemini-poll. Includes history truncation metadata when older turns are omitted. Throws if the session has a pending job.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -177,12 +197,12 @@ export const geminiReplyToolDefinition: Tool = {
       model: {
         type: "string",
         description:
-          "Gemini model to use. Overrides the model used in the original ask-gemini call.",
+          "Gemini model to use. Overrides the model used in the original ask-gemini call. (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview)",
       },
       cwd: {
         type: "string",
         description:
-          "Working directory for the subprocess. Required for any @file path (relative or absolute) — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected.",
+          "Required when the prompt contains 2 or more @file references. A single @file ref is resolved by the CLI without cwd. If cwd is omitted with 2+ @file refs and the client supports elicitation, you will be prompted to provide it.",
       },
       wait: {
         type: "boolean",
@@ -210,6 +230,8 @@ export const geminiReplyToolDefinition: Tool = {
       response: { type: "string" },
       partialResponse: { type: "string" },
       timedOut: { type: "boolean" },
+      historyTruncated: { type: "boolean" },
+      historyTurnCount: { type: "number" },
     },
     required: ["jobId", "pollIntervalMs"],
   },

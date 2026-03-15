@@ -74,10 +74,14 @@ describe("readResource", () => {
     vi.clearAllMocks();
     runnerMock.getServerStats.mockReturnValue({
       semaphore: { active: 1, queued: 0 },
-      pool: { enabled: true, ready: 2, size: 2 },
+      pool: { enabled: true, ready: 2, size: 2, lastError: null, consecutiveFailures: 0 },
       maxConcurrent: 2,
     });
-    jobStoreMock.getJobStats.mockReturnValue({ active: 1, total: 3 });
+    jobStoreMock.getJobStats.mockReturnValue({
+      active: 1,
+      total: 3,
+      byStatus: { pending: 1, done: 1, error: 1, cancelled: 0 },
+    });
     sessionStoreMock.getSessionCount.mockReturnValue(5);
   });
 

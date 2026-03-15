@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const runnerMock = vi.hoisted(() => ({
   geminiBinary: "/usr/local/bin/gemini",
   getServerStats: vi.fn(),
+  getEnvOverrides: vi.fn(),
 }));
 
 vi.mock("../../src/gemini-runner.js", () => ({
@@ -10,6 +11,7 @@ vi.mock("../../src/gemini-runner.js", () => ({
     return runnerMock.geminiBinary;
   },
   getServerStats: runnerMock.getServerStats,
+  getEnvOverrides: runnerMock.getEnvOverrides,
 }));
 
 vi.mock("../../src/job-store.js", () => ({
@@ -37,10 +39,21 @@ beforeEach(() => {
   runnerMock.geminiBinary = "/usr/local/bin/gemini";
   mockGetServerStats.mockReturnValue({
     semaphore: { active: 2, queued: 3 },
-    pool: { enabled: true, ready: 1, size: 4 },
+    pool: {
+      enabled: true,
+      ready: 1,
+      size: 4,
+      lastError: "spawn ENOENT",
+      consecutiveFailures: 2,
+    },
     maxConcurrent: 4,
   });
-  mockGetJobStats.mockReturnValue({ active: 5, total: 9 });
+  runnerMock.getEnvOverrides.mockReturnValue({ GEMINI_MAX_CONCURRENT: 4 });
+  mockGetJobStats.mockReturnValue({
+    active: 5,
+    total: 9,
+    byStatus: { pending: 5, done: 2, error: 1, cancelled: 1 },
+  });
   mockSessionStore.getSessionCount.mockReturnValue(7);
   vi.spyOn(process, "uptime").mockReturnValue(12.34);
 });
@@ -54,9 +67,14 @@ describe("geminiHealth", () => {
     const result = await geminiHealth({});
     expect(result).toEqual({
       binary: { path: "/usr/local/bin/gemini" },
-      pool: { enabled: true, ready: 1, size: 4 },
+      env: { GEMINI_MAX_CONCURRENT: 4 },
+      pool: { enabled: true, ready: 1, size: 4, lastError: "spawn ENOENT", consecutiveFailures: 2 },
       concurrency: { max: 4, active: 2, queued: 3 },
-      jobs: { active: 5, total: 9 },
+      jobs: {
+        active: 5,
+        total: 9,
+        byStatus: { pending: 5, done: 2, error: 1, cancelled: 1 },
+      },
       sessions: { total: 7 },
       server: { uptime: 12.34, version: "0.5.0" },
     });
@@ -76,9 +94,14 @@ describe("dispatcher routing for gemini-health", () => {
     expect(result.isError).toBeUndefined();
     expect(result.structuredContent).toEqual({
       binary: { path: "/usr/local/bin/gemini" },
-      pool: { enabled: true, ready: 1, size: 4 },
+      env: { GEMINI_MAX_CONCURRENT: 4 },
+      pool: { enabled: true, ready: 1, size: 4, lastError: "spawn ENOENT", consecutiveFailures: 2 },
       concurrency: { max: 4, active: 2, queued: 3 },
-      jobs: { active: 5, total: 9 },
+      jobs: {
+        active: 5,
+        total: 9,
+        byStatus: { pending: 5, done: 2, error: 1, cancelled: 1 },
+      },
       sessions: { total: 7 },
       server: { uptime: 12.34, version: "0.5.0" },
     });

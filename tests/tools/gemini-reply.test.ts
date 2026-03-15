@@ -72,7 +72,7 @@ const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 beforeEach(() => {
   vi.clearAllMocks();
   mockStore.get.mockReturnValue(true);
-  mockStore.formatHistory.mockReturnValue("");
+  mockStore.formatHistory.mockReturnValue({ history: "", truncated: false, totalTurns: 0 });
   mockStore.getPendingJob.mockReturnValue(undefined);
   mockRunGemini.mockResolvedValue("Gemini follow-up response.");
   mockJobStore.getJob.mockReturnValue({
@@ -96,6 +96,20 @@ describe("geminiReply", () => {
   it("pollIntervalMs is 2000 in response", async () => {
     const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" });
     expect(result.pollIntervalMs).toBe(2000);
+  });
+
+  it("does not include historyTruncated when history is not truncated", async () => {
+    mockStore.formatHistory.mockReturnValue({ history: "User: hi", truncated: false, totalTurns: 2 });
+    const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" });
+    expect(result.historyTruncated).toBeUndefined();
+    expect(result.historyTurnCount).toBeUndefined();
+  });
+
+  it("includes historyTruncated and historyTurnCount when history is truncated", async () => {
+    mockStore.formatHistory.mockReturnValue({ history: "User: old", truncated: true, totalTurns: 42 });
+    const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "hello" });
+    expect(result.historyTruncated).toBe(true);
+    expect(result.historyTurnCount).toBe(42);
   });
 
   it("jobId is a UUID", async () => {
@@ -216,7 +230,7 @@ describe("geminiReply", () => {
   // ── History prepending ───────────────────────────────────────────────────────
 
   it("calls runGemini with the prompt when there is no prior history", async () => {
-    mockStore.formatHistory.mockReturnValue("");
+    mockStore.formatHistory.mockReturnValue({ history: "", truncated: false, totalTurns: 0 });
     await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "new question" });
     await flush();
     expect(mockRunGemini).toHaveBeenCalledWith(
@@ -230,7 +244,7 @@ describe("geminiReply", () => {
   it("prepends conversation history with \\n\\n separator", async () => {
     const history =
       "[Conversation history]\nUser: hi\nAssistant: hello\n[End of history — continue the conversation]";
-    mockStore.formatHistory.mockReturnValue(history);
+    mockStore.formatHistory.mockReturnValue({ history, truncated: false, totalTurns: 2 });
 
     await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "what did I say?" });
     await flush();

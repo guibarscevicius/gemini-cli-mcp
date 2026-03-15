@@ -104,6 +104,12 @@ describe("WarmProcessPool", () => {
     expect(pool.size).toBe(5);
   });
 
+  it("lastError is null and consecutiveFailures starts at 0", () => {
+    const pool = new WarmProcessPool(1, [], {});
+    expect(pool.lastError).toBeNull();
+    expect(pool.consecutiveFailures).toBe(0);
+  });
+
   // ── acquire / release ─────────────────────────────────────────────────────
 
   it("acquire() returns a ready process immediately", async () => {
@@ -178,6 +184,7 @@ describe("WarmProcessPool", () => {
     // Pool should have replenished
     expect(spawnCalls).toHaveLength(2);
     expect(pool.readyCount).toBe(1);
+    expect(pool.lastError).toBe("spawn error");
   });
 
   it("process that exits unexpectedly is removed and a replacement is spawned", async () => {
@@ -410,6 +417,7 @@ describe("WarmProcessPool ENOENT backoff", () => {
 
     // Pool spawns 1 initially, then replenishes up to MAX_CONSECUTIVE_FAILURES times = 5 total
     expect(tracker.count).toBe(5);
+    expect(pool.consecutiveFailures).toBe(5);
 
     await pool.drain();
   });

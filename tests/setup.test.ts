@@ -63,6 +63,10 @@ describe("runSetup", () => {
           setTimeout(() => {
             handlers["close"]?.forEach((cb) => cb(0, null));
           }, 10);
+        } else {
+          setTimeout(() => {
+            handlers["close"]?.forEach((cb) => cb(1, null));
+          }, 10);
         }
         return cp;
       });
@@ -219,9 +223,18 @@ describe("runSetup", () => {
     });
     vi.doMock("node:child_process", async (importOriginal) => {
       const actual = await importOriginal<typeof import("node:child_process")>();
-      const mockSpawn = vi.fn().mockImplementation(() => {
-        // Never closes — will trigger timeout
-        return mockChildProcess();
+      const mockSpawn = vi.fn().mockImplementation((_cmd: string, args: string[]) => {
+        const cp = mockChildProcess();
+        const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+        (cp.on as ReturnType<typeof vi.fn>).mockImplementation((evt: string, cb: (...a: unknown[]) => void) => {
+          handlers[evt] = handlers[evt] ?? [];
+          handlers[evt].push(cb);
+        });
+        if (!args.includes("--prompt")) {
+          setTimeout(() => handlers["close"]?.forEach((cb) => cb(1, null)), 10);
+        }
+        // Auth check process never closes — will trigger timeout.
+        return cp;
       });
       return { ...actual, spawn: mockSpawn };
     });

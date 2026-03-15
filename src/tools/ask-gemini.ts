@@ -15,13 +15,13 @@ export const AskGeminiSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default."),
+    .describe("Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default. (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview)"),
   cwd: z
     .string()
     .min(1)
     .optional()
     .describe(
-      "Working directory for the Gemini subprocess. Required for any @file path — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected."
+      "Required when the prompt contains 2 or more @file references. A single @file ref is resolved by the CLI without cwd. If cwd is omitted with 2+ @file refs and the client supports elicitation, you will be prompted to provide it."
     ),
   wait: z
     .boolean()
@@ -159,12 +159,12 @@ export const askGeminiToolDefinition: Tool = {
       model: {
         type: "string",
         description:
-          "Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default.",
+          "Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default. (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview)",
       },
       cwd: {
         type: "string",
         description:
-          "Working directory for the subprocess. Required for any @file path (relative or absolute) — Gemini enforces a workspace boundary at cwd; files outside the tree are rejected.",
+          "Required when the prompt contains 2 or more @file references. A single @file ref is resolved by the CLI without cwd. If cwd is omitted with 2+ @file refs and the client supports elicitation, you will be prompted to provide it.",
       },
       wait: {
         type: "boolean",

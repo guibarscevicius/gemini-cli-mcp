@@ -47,7 +47,7 @@ describe("SessionStore", () => {
     store.appendTurn(id, "user", "q2");
     store.appendTurn(id, "assistant", "a2");
 
-    const history = store.formatHistory(id);
+    const { history, truncated, totalTurns } = store.formatHistory(id);
     const lines = history.split("\n");
 
     expect(lines[0]).toBe("[Conversation history]");
@@ -56,6 +56,8 @@ describe("SessionStore", () => {
     expect(lines[3]).toBe("User: q2");
     expect(lines[4]).toBe("Assistant: a2");
     expect(lines[5]).toBe("[End of history — continue the conversation]");
+    expect(truncated).toBe(false);
+    expect(totalTurns).toBe(4);
   });
 
   it("appendTurn on non-existent session drops the turn and leaves store consistent", () => {
@@ -64,7 +66,7 @@ describe("SessionStore", () => {
     store.appendTurn("ghost-session", "user", "should be dropped");
     store.appendTurn(id, "user", "should work");
     store.appendTurn(id, "assistant", "response");
-    const history = store.formatHistory(id);
+    const { history } = store.formatHistory(id);
     expect(history).toContain("should work");
     expect(history).not.toContain("should be dropped");
   });
@@ -78,13 +80,15 @@ describe("SessionStore", () => {
       store.appendTurn(id, "assistant", `assistant-${i}`);
     }
 
-    const history = store.formatHistory(id);
+    const { history, truncated, totalTurns } = store.formatHistory(id);
     const lines = history.split("\n");
     const turnLines = lines.filter(
       (line) => line.startsWith("User:") || line.startsWith("Assistant:")
     );
 
     expect(history).toContain("earlier turns omitted");
+    expect(truncated).toBe(true);
+    expect(totalTurns).toBe(50);
     expect(turnLines).toHaveLength(40);
     expect(history).not.toContain("User: user-5\n");
     expect(history).not.toContain("Assistant: assistant-5\n");
@@ -102,12 +106,14 @@ describe("SessionStore", () => {
       store.appendTurn(id, "assistant", `assistant-${i}`);
     }
 
-    const history = store.formatHistory(id);
+    const { history, truncated, totalTurns } = store.formatHistory(id);
     const turnLines = history
       .split("\n")
       .filter((line) => line.startsWith("User:") || line.startsWith("Assistant:"));
 
     expect(history).not.toContain("earlier turns omitted");
+    expect(truncated).toBe(false);
+    expect(totalTurns).toBe(50);
     expect(turnLines).toHaveLength(50);
     expect(history).toContain("User: user-1");
     expect(history).toContain("Assistant: assistant-1");
@@ -134,7 +140,7 @@ describe("SessionStore", () => {
     const second = new SessionStore(SESSION_TTL_MS, undefined, dbPath);
     try {
       expect(second.get(id)).toBe(true);
-      const history = second.formatHistory(id);
+      const { history } = second.formatHistory(id);
       expect(history).toContain("User: hello");
       expect(history).toContain("Assistant: hi");
       expect(history).toContain("User: how are you?");

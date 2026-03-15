@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRequire } from "node:module";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { GEMINI_BINARY, getServerStats } from "../gemini-runner.js";
+import { GEMINI_BINARY, getServerStats, getEnvOverrides } from "../gemini-runner.js";
 import { getJobStats } from "../job-store.js";
 import { sessionStore } from "../session-store.js";
 
@@ -11,9 +11,20 @@ const SERVER_VERSION: string = (_require("../../package.json") as { version: str
 
 export interface GeminiHealthOutput {
   binary: { path: string | null };
-  pool: { enabled: boolean; ready: number; size: number };
+  env: Record<string, unknown>;
+  pool: {
+    enabled: boolean;
+    ready: number;
+    size: number;
+    lastError: string | null;
+    consecutiveFailures: number;
+  };
   concurrency: { max: number; active: number; queued: number };
-  jobs: { active: number; total: number };
+  jobs: {
+    active: number;
+    total: number;
+    byStatus: { pending: number; done: number; error: number; cancelled: number };
+  };
   sessions: { total: number };
   server: { uptime: number; version: string };
 }
@@ -27,10 +38,13 @@ export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> 
 
   return {
     binary: { path: binaryPath === "gemini" ? null : binaryPath },
+    env: getEnvOverrides(),
     pool: {
       enabled: serverStats.pool.enabled,
       ready: serverStats.pool.ready,
       size: serverStats.pool.size,
+      lastError: serverStats.pool.lastError,
+      consecutiveFailures: serverStats.pool.consecutiveFailures,
     },
     concurrency: {
       max: serverStats.maxConcurrent,
@@ -40,6 +54,7 @@ export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> 
     jobs: {
       active: jobStats.active,
       total: jobStats.total,
+      byStatus: jobStats.byStatus,
     },
     sessions: {
       total: sessionStore.getSessionCount(),
@@ -55,7 +70,7 @@ export const geminiHealthToolDefinition: Tool = {
   name: "gemini-health",
   title: "Get Gemini Health",
   description:
-    "Return runtime health diagnostics: binary path, pool/semaphore concurrency, active jobs, session count, and server uptime.",
+    "Return runtime diagnostics: binary path, env overrides, pool/semaphore concurrency and pool errors, job totals with per-status counts, session count, and server uptime.",
   inputSchema: {
     type: "object" as const,
     properties: {},
@@ -71,14 +86,20 @@ export const geminiHealthToolDefinition: Tool = {
         },
         required: ["path"],
       },
+      env: {
+        type: "object",
+        additionalProperties: true,
+      },
       pool: {
         type: "object",
         properties: {
           enabled: { type: "boolean" },
           ready: { type: "number" },
           size: { type: "number" },
+          lastError: { type: ["string", "null"] },
+          consecutiveFailures: { type: "number" },
         },
-        required: ["enabled", "ready", "size"],
+        required: ["enabled", "ready", "size", "lastError", "consecutiveFailures"],
       },
       concurrency: {
         type: "object",
@@ -94,8 +115,18 @@ export const geminiHealthToolDefinition: Tool = {
         properties: {
           active: { type: "number" },
           total: { type: "number" },
+          byStatus: {
+            type: "object",
+            properties: {
+              pending: { type: "number" },
+              done: { type: "number" },
+              error: { type: "number" },
+              cancelled: { type: "number" },
+            },
+            required: ["pending", "done", "error", "cancelled"],
+          },
         },
-        required: ["active", "total"],
+        required: ["active", "total", "byStatus"],
       },
       sessions: {
         type: "object",
@@ -113,7 +144,7 @@ export const geminiHealthToolDefinition: Tool = {
         required: ["uptime", "version"],
       },
     },
-    required: ["binary", "pool", "concurrency", "jobs", "sessions", "server"],
+    required: ["binary", "env", "pool", "concurrency", "jobs", "sessions", "server"],
   },
   annotations: {
     title: "Get Gemini Health",

@@ -49,6 +49,7 @@ export class WarmProcessPool {
   private readonly waiters: Waiter[] = [];
   private draining = false;
   private consecutiveSpawnFailures = 0;
+  private lastSpawnError: string | null = null;
   private static readonly MAX_CONSECUTIVE_FAILURES = 5;
 
   /**
@@ -106,6 +107,9 @@ export class WarmProcessPool {
     // crash or auth failure), remove it and replenish.
     const onExitOrError = (err?: Error) => {
       clearInterval(keepAliveInterval);
+      if (err) {
+        this.lastSpawnError = err.message;
+      }
       const idx = this.ready.findIndex((r) => r.wp === wp);
       if (idx !== -1) {
         this.ready.splice(idx, 1);
@@ -233,5 +237,15 @@ export class WarmProcessPool {
   /** Configured pool size. */
   get size(): number {
     return this.poolSize;
+  }
+
+  /** Most recent spawn/runtime error observed while replenishing the pool. */
+  get lastError(): string | null {
+    return this.lastSpawnError;
+  }
+
+  /** Consecutive ENOENT spawn failures while replenishing the pool. */
+  get consecutiveFailures(): number {
+    return this.consecutiveSpawnFailures;
   }
 }

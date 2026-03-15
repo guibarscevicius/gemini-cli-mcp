@@ -69,12 +69,20 @@ export function getJob(jobId: string): Job | undefined {
   return jobs.get(jobId);
 }
 
-export function getJobStats(): { active: number; total: number } {
-  let active = 0;
+export function getJobStats(): {
+  active: number;
+  total: number;
+  byStatus: { pending: number; done: number; error: number; cancelled: number };
+} {
+  const byStatus = { pending: 0, done: 0, error: 0, cancelled: 0 };
   for (const job of jobs.values()) {
-    if (job.status === "pending") active++;
+    byStatus[job.status]++;
   }
-  return { active, total: jobs.size };
+  return {
+    active: byStatus.pending,
+    total: jobs.size,
+    byStatus,
+  };
 }
 
 export function appendChunk(jobId: string, chunk: string): void {

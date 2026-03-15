@@ -18,6 +18,13 @@ const SAMPLE_TURNS = [
   { role: "assistant", content: "The capital of France is Paris." },
 ];
 
+const FOUR_TURNS: Turn[] = [
+  { role: "user", content: "u1" },
+  { role: "assistant", content: "a1" },
+  { role: "user", content: "u2" },
+  { role: "assistant", content: "a2" },
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
   sessionStoreMock.getTurns.mockReturnValue(SAMPLE_TURNS);
@@ -91,6 +98,35 @@ describe("geminiExport — default format", () => {
     expect(result.format).toBe("json");
     // content must be parseable JSON
     expect(() => JSON.parse(result.content)).not.toThrow();
+  });
+});
+
+describe("geminiExport — lastN", () => {
+  it("lastN: 2 exports only the last two turns from a four-turn session", async () => {
+    sessionStoreMock.getTurns.mockReturnValue(FOUR_TURNS);
+    const result = await geminiExport({ sessionId: "sess-1", lastN: 2 });
+
+    expect(result.lastN).toBe(2);
+    expect(result.turnCount).toBe(2);
+    expect(result.turns).toEqual(FOUR_TURNS.slice(-2));
+    expect(JSON.parse(result.content)).toEqual(FOUR_TURNS.slice(-2));
+  });
+
+  it("lastN larger than session length exports all turns", async () => {
+    sessionStoreMock.getTurns.mockReturnValue(FOUR_TURNS);
+    const result = await geminiExport({ sessionId: "sess-1", lastN: 10 });
+
+    expect(result.turnCount).toBe(4);
+    expect(result.turns).toEqual(FOUR_TURNS);
+  });
+
+  it("when lastN is omitted, exports full history", async () => {
+    sessionStoreMock.getTurns.mockReturnValue(FOUR_TURNS);
+    const result = await geminiExport({ sessionId: "sess-1" });
+
+    expect(result.lastN).toBeUndefined();
+    expect(result.turnCount).toBe(4);
+    expect(result.turns).toEqual(FOUR_TURNS);
   });
 });
 
