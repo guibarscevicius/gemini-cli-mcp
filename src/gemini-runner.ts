@@ -754,7 +754,11 @@ function escapeGlobSegments(rawPath: string): string {
  */
 export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
   const fileRefs = extractFileRefs(prompt);
-  if (fileRefs.length < 2) return prompt;
+  // Always expand image file refs ourselves (CLI --prompt mode doesn't handle binary files).
+  // For text-only single-ref prompts, let the CLI handle it natively.
+  const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+  const hasImageRef = fileRefs.some((ref) => IMAGE_EXT_RE.test(ref));
+  if (fileRefs.length < 2 && !hasImageRef) return prompt;
 
   const cwdResolved = nodePath.resolve(cwd);
   let realCwd: string;
@@ -812,6 +816,35 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
               EISDIR: "is a directory — use a glob pattern like @src/**/*.ts",
               EACCES: "permission denied",
             };
+
+            const relPath = nodePath.relative(realCwd, realAbsPath);
+            const ext = nodePath.extname(realAbsPath).toLowerCase();
+            const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"]);
+
+            if (IMAGE_EXTENSIONS.has(ext)) {
+              // Read image as binary and base64-encode for multimodal Gemini input
+              let buf: Buffer;
+              try {
+                buf = await readFile(realAbsPath);
+              } catch (err) {
+                const code = (err as { code?: string }).code ?? "unknown";
+                const detail = readErrorDetails[code] ?? `read failed (${code})`;
+                throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
+              }
+              const mimeTypes: Record<string, string> = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".webp": "image/webp",
+                ".gif": "image/gif",
+                ".bmp": "image/bmp",
+                ".svg": "image/svg+xml",
+              };
+              const mime = mimeTypes[ext] ?? "application/octet-stream";
+              const b64 = buf.toString("base64");
+              return `Image from @${relPath} (${mime}, ${buf.length} bytes):\ndata:${mime};base64,${b64}`;
+            }
+
             let content: string;
             try {
               content = await readFile(realAbsPath, "utf-8");
@@ -821,7 +854,6 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
               throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
             }
 
-            const relPath = nodePath.relative(realCwd, realAbsPath);
             return `Content from @${relPath}:\n${content}`;
           })
         );
