@@ -4,6 +4,7 @@ import { McpError, ErrorCode, type Tool } from "@modelcontextprotocol/sdk/types.
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
 import { countFileRefs } from "../gemini-runner.js";
+import { mcpLog } from "../logging.js";
 import { runGeminiAsync, elicitCwdIfNeeded } from "./shared.js";
 
 export const GeminiBatchSchema = z.object({
@@ -82,7 +83,7 @@ export async function geminiBatch(input: unknown, ctx: ToolCallContext = {}): Pr
         "cwd is required when prompt contains multiple @file references. Provide cwd or use an MCP client that supports elicitation."
       );
     }
-    effectiveCwd = resolvedCwd ?? cwd;
+    effectiveCwd = resolvedCwd;
   }
 
   const items = prompts.map((prompt, index) => ({
@@ -107,6 +108,7 @@ export async function geminiBatch(input: unknown, ctx: ToolCallContext = {}): Pr
         process.stderr.write(
           `[gemini-cli-mcp] gemini-batch job ${jobId} failed: ${message}\n`
         );
+        mcpLog("error", "jobs", { event: "job_failed", jobId, error: message });
         jobStore.failJob(jobId, message);
       });
   }

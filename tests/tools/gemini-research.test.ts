@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError } from "zod";
 
 vi.mock("../../src/gemini-runner.js", () => ({
@@ -38,6 +39,7 @@ vi.mock("../../src/tools/shared.js", () => ({
 }));
 
 import { runGeminiAsync, waitForJob, elicitCwdIfNeeded } from "../../src/tools/shared.js";
+import { countFileRefs } from "../../src/gemini-runner.js";
 import {
   geminiResearch,
   geminiResearchToolDefinition,
@@ -46,6 +48,7 @@ import {
 const mockRunGeminiAsync = vi.mocked(runGeminiAsync);
 const mockWaitForJob = vi.mocked(waitForJob);
 const mockElicitCwdIfNeeded = vi.mocked(elicitCwdIfNeeded);
+const mockCountFileRefs = vi.mocked(countFileRefs);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -74,6 +77,7 @@ describe("geminiResearch", () => {
     expect(mockRunGeminiAsync.mock.calls[0][1]).toBe(
       "Answer the following question directly and concisely. Prefer existing knowledge; use web search only if current/real-time data is clearly needed.\n\nWhat is MCP?"
     );
+    expect(mockRunGeminiAsync.mock.calls[0][2]).not.toHaveProperty("research");
   });
 
   it("prepends standard preamble", async () => {
@@ -88,6 +92,26 @@ describe("geminiResearch", () => {
     expect(mockRunGeminiAsync.mock.calls[0][1]).toBe(
       "Conduct a comprehensive research investigation into the following question. Use multiple web searches, cross-reference sources, explore subtopics, and verify claims from independent sources. Produce a detailed report with: executive summary, key findings, supporting evidence, uncertainties or conflicting information, and actionable conclusions.\n\nWhat is MCP?"
     );
+  });
+
+  it("throws McpError when elicitation is cancelled (resolvedCwd === null)", async () => {
+    mockElicitCwdIfNeeded.mockResolvedValueOnce(null);
+    await expect(
+      geminiResearch({ query: "@file1.ts and @file2.ts" }, { elicit: vi.fn() })
+    ).rejects.toThrow(McpError);
+
+    mockElicitCwdIfNeeded.mockResolvedValueOnce(null);
+    await expect(
+      geminiResearch({ query: "@file1.ts and @file2.ts" }, { elicit: vi.fn() })
+    ).rejects.toThrow("cancelled by user");
+  });
+
+  it("throws McpError when elicitation unsupported and multiple @file refs present", async () => {
+    mockElicitCwdIfNeeded.mockResolvedValueOnce(undefined);
+    mockCountFileRefs.mockReturnValueOnce(2);
+    await expect(
+      geminiResearch({ query: "@file1.ts and @file2.ts" }, {})
+    ).rejects.toThrow(McpError);
   });
 
   it("wait: true returns { jobId, response, pollIntervalMs }", async () => {

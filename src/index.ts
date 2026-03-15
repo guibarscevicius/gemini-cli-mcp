@@ -76,8 +76,8 @@ export function createServer(): Server {
     logging: {},
     resources: { listChanged: true },
     prompts: {},
-    elicitation: {},
-  } as unknown as NonNullable<ConstructorParameters<typeof Server>[1]>["capabilities"];
+    ...({ elicitation: {} } as Record<string, unknown>),
+  } as NonNullable<ConstructorParameters<typeof Server>[1]>["capabilities"];
 
   const server = new Server(
     { name: "gemini-cli-mcp", version: pkgVersion },

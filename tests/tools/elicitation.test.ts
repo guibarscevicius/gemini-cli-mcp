@@ -71,6 +71,13 @@ describe("elicitCwdIfNeeded", () => {
     );
   });
 
+  it("returns null when accept action has non-string cwd content", async () => {
+    mockCountFileRefs.mockReturnValue(2);
+    const mockElicit = vi.fn().mockResolvedValue({ action: "accept", content: { cwd: 42 } });
+    const result = await elicitCwdIfNeeded("@a.ts @b.ts", undefined, { elicit: mockElicit });
+    expect(result).toBeNull();
+  });
+
   it("returns null when user declines", async () => {
     mockCountFileRefs.mockReturnValue(2);
     const elicit = vi.fn().mockResolvedValue({ action: "decline" });

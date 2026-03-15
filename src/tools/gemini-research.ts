@@ -85,9 +85,13 @@ export async function geminiResearch(
 
   runGeminiAsync(jobId, fullPrompt, { model, cwd: effectiveCwd, tool: "gemini-research", expandRefs }, ctx)
     .then((response) => {
-      jobStore.completeJob(jobId, response);
-      if (ctx.requestId !== undefined) {
-        unregisterRequest(ctx.requestId);
+      try {
+        jobStore.completeJob(jobId, response);
+        mcpLog("info", "jobs", { event: "job_completed", jobId });
+      } finally {
+        if (ctx.requestId !== undefined) {
+          unregisterRequest(ctx.requestId);
+        }
       }
     })
     .catch((err: unknown) => {
@@ -112,9 +116,9 @@ export async function geminiResearch(
       delete ctx.progressToken;
       if (result.timedOut) {
         if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
-        return { jobId, partialResponse: result.partialResponse, timedOut: true, pollIntervalMs: 2000 };
+        return { jobId, partialResponse: result.partialResponse ?? "", timedOut: true, pollIntervalMs: 2000 };
       }
-      return { jobId, response: result.response, pollIntervalMs: 2000 };
+      return { jobId, response: result.response ?? "", pollIntervalMs: 2000 };
     } catch (err) {
       delete ctx.progressToken;
       if (err instanceof SemaphoreTimeoutError) {

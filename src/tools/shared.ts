@@ -1,7 +1,7 @@
 import { countFileRefs, runGemini, spawnGemini, type GeminiExecutor } from "../gemini-runner.js";
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
-import type { ElicitRequestFormParams } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode, type ElicitRequestFormParams } from "@modelcontextprotocol/sdk/types.js";
 import { mcpLog } from "../logging.js";
 
 /**
@@ -135,9 +135,17 @@ export async function elicitCwdIfNeeded(
     },
   };
 
-  const result = await ctx.elicit(params);
+  let result: Awaited<ReturnType<NonNullable<ToolCallContext["elicit"]>>>;
+  try {
+    result = await ctx.elicit(params);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[gemini-cli-mcp] elicitation failed: ${msg}\n`);
+    throw new McpError(ErrorCode.InternalError, `Elicitation request failed: ${msg}`);
+  }
   if (result.action === "accept" && typeof result.content?.cwd === "string") {
     return result.content.cwd;
   }
+  process.stderr.write(`[gemini-cli-mcp] elicitation action=${result.action} — treating as cancel\n`);
   return null;
 }

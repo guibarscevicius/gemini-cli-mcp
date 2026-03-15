@@ -95,6 +95,40 @@ describe("index wiring", () => {
     );
   });
 
+  it("passes elicit function to ctx when client supports elicitation", async () => {
+    const localHandlers = new Map<unknown, RequestHandler>();
+    const elicitInput = vi.fn();
+
+    registerToolHandlers({
+      setRequestHandler(schema, handler) {
+        localHandlers.set(schema, handler as RequestHandler);
+        return this;
+      },
+      getClientCapabilities() {
+        return { elicitation: {} };
+      },
+      elicitInput,
+    } as Parameters<typeof registerToolHandlers>[0]);
+
+    const callTool = localHandlers.get(CallToolRequestSchema);
+    expect(callTool).toBeDefined();
+    await callTool!(
+      {
+        params: {
+          name: "ask-gemini",
+          arguments: { prompt: "hello" },
+        },
+      },
+      undefined
+    );
+
+    expect(mockHandleCallTool).toHaveBeenCalledWith(
+      "ask-gemini",
+      { prompt: "hello" },
+      expect.objectContaining({ elicit: expect.any(Function) })
+    );
+  });
+
   it("createServer includes logging, resources, prompts, and elicitation capabilities", () => {
     const server = createServer() as unknown as {
       _capabilities: {
