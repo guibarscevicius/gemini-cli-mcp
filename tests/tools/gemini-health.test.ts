@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { version } from "../../package.json";
 
 const runnerMock = vi.hoisted(() => ({
   geminiBinary: "/usr/local/bin/gemini",
@@ -76,7 +77,7 @@ describe("geminiHealth", () => {
         byStatus: { pending: 5, done: 2, error: 1, cancelled: 1 },
       },
       sessions: { total: 7 },
-      server: { uptime: 12.34, version: "0.5.0" },
+      server: { uptime: 12.34, version },
     });
   });
 
@@ -109,7 +110,7 @@ describe("dispatcher routing for gemini-health", () => {
         byStatus: { pending: 5, done: 2, error: 1, cancelled: 1 },
       },
       sessions: { total: 7 },
-      server: { uptime: 12.34, version: "0.5.0" },
+      server: { uptime: 12.34, version },
     });
   });
 });
