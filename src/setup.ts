@@ -206,7 +206,9 @@ export async function runServerSelfTest(entry: string, binary: string): Promise<
   } finally {
     try {
       if (cp.exitCode === null) cp.kill("SIGTERM");
-    } catch {}
+    } catch {
+      // SIGTERM on an already-exited process throws — safe to ignore
+    }
   }
 }
 
