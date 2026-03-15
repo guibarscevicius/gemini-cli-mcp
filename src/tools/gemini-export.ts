@@ -15,14 +15,15 @@ export const GeminiExportSchema = z.object({
     .int()
     .positive()
     .optional()
-    .describe("Export only the last N turns. Omit for full history."),
+    .describe("Export only the last N individual messages (turns). Note: a single user+assistant exchange is 2 turns. Omit for full history."),
 });
 export type GeminiExportInput = z.infer<typeof GeminiExportSchema>;
 
 export interface GeminiExportOutput {
   sessionId: string;
-  /** Convenience count. Always equal to `turns.length`. Constructed only by `geminiExport()`. */
+  /** Number of turns exported. When lastN is provided, equals min(lastN, totalTurnCount). */
   turnCount: number;
+  totalTurnCount?: number;
   format: "json" | "markdown";
   turns: Turn[];
   lastN?: number;
@@ -57,6 +58,7 @@ export async function geminiExport(input: unknown): Promise<GeminiExportOutput> 
     format,
     turns: filteredTurns,
     ...(lastN !== undefined ? { lastN } : {}),
+    ...(lastN !== undefined ? { totalTurnCount: turns.length } : {}),
     content,
     exportedAt: new Date().toISOString(),
   };
@@ -78,7 +80,7 @@ export const geminiExportToolDefinition: Tool = {
       },
       lastN: {
         type: "integer",
-        description: "Export only the last N turns. Omit for full history.",
+        description: "Export only the last N individual messages (turns). Note: a single user+assistant exchange is 2 turns. Omit for full history.",
       },
     },
     required: ["sessionId"],
@@ -90,6 +92,7 @@ export const geminiExportToolDefinition: Tool = {
       turnCount: { type: "integer" },
       format: { type: "string", enum: ["json", "markdown"] },
       lastN: { type: "integer" },
+      totalTurnCount: { type: "integer" },
       turns: {
         type: "array",
         items: {

@@ -15,7 +15,7 @@ export const GeminiResearchSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default. (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview)"),
+    .describe("Gemini model to use (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview). Defaults to CLI default."),
   cwd: z
     .string()
     .min(1)
@@ -152,7 +152,7 @@ export const geminiResearchToolDefinition: Tool = {
       model: {
         type: "string",
         description:
-          "Gemini model to use (e.g. gemini-3-flash-preview). Defaults to CLI default. (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview)",
+          "Gemini model to use (e.g. gemini-3-flash-preview, gemini-3.1-pro-preview). Defaults to CLI default.",
       },
       cwd: {
         type: "string",

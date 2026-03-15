@@ -102,7 +102,7 @@ function createLineReader(cp: ReturnType<typeof spawn>) {
   return { waitForLineContaining };
 }
 
-async function runServerSelfTest(entry: string, binary: string): Promise<{
+export async function runServerSelfTest(entry: string, binary: string): Promise<{
   binary: string;
   poolReady: number;
   poolSize: number;
@@ -115,7 +115,10 @@ async function runServerSelfTest(entry: string, binary: string): Promise<{
   const reader = createLineReader(cp);
 
   try {
-    cp.stdin?.write(
+    if (!cp.stdin) {
+      throw new Error("self-test: server process stdin not available");
+    }
+    cp.stdin.write(
       `${JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
@@ -127,12 +130,26 @@ async function runServerSelfTest(entry: string, binary: string): Promise<{
         },
       })}\n`
     );
-    await reader.waitForLineContaining("\"id\":1", 15_000);
+    const initLine = await reader.waitForLineContaining("\"id\":1", 15_000);
+    try {
+      const initResponse = JSON.parse(initLine) as {
+        error?: { code: number; message: string };
+        result?: unknown;
+      };
+      if (initResponse.error) {
+        throw new Error(`self-test: initialize failed: ${initResponse.error.message}`);
+      }
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        throw new Error(`self-test: server returned non-JSON initialize response: ${initLine.slice(0, 200)}`);
+      }
+      throw err;
+    }
 
-    cp.stdin?.write(
+    cp.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })}\n`
     );
-    cp.stdin?.write(
+    cp.stdin.write(
       `${JSON.stringify({
         jsonrpc: "2.0",
         id: 2,
@@ -142,18 +159,44 @@ async function runServerSelfTest(entry: string, binary: string): Promise<{
     );
 
     const responseLine = await reader.waitForLineContaining("\"id\":2", 30_000);
-    const response = JSON.parse(responseLine) as {
+    let response: {
       result?: { content?: Array<{ text?: string }> };
+      error?: { code: number; message: string };
     };
+    try {
+      response = JSON.parse(responseLine) as {
+        result?: { content?: Array<{ text?: string }> };
+        error?: { code: number; message: string };
+      };
+    } catch {
+      throw new Error(`self-test: server returned non-JSON response: ${responseLine.slice(0, 200)}`);
+    }
+    if ("error" in response && response.error) {
+      throw new Error(`self-test: server returned JSON-RPC error: ${JSON.stringify(response.error)}`);
+    }
     const text = response.result?.content?.[0]?.text;
     if (typeof text !== "string") {
       throw new Error("gemini-health response missing result.content[0].text");
     }
-    const health = JSON.parse(text) as {
+    let health: {
       binary?: { path?: string | null };
       pool?: { ready?: number; size?: number };
       server?: { version?: string };
     };
+    try {
+      health = JSON.parse(text) as {
+        binary?: { path?: string | null };
+        pool?: { ready?: number; size?: number };
+        server?: { version?: string };
+      };
+    } catch {
+      return {
+        binary,
+        poolReady: 0,
+        poolSize: 0,
+        version: "unknown",
+      };
+    }
     return {
       binary: health.binary?.path ?? binary,
       poolReady: health.pool?.ready ?? 0,
@@ -161,9 +204,9 @@ async function runServerSelfTest(entry: string, binary: string): Promise<{
       version: health.server?.version ?? "unknown",
     };
   } finally {
-    if (cp.exitCode === null) {
-      cp.kill("SIGTERM");
-    }
+    try {
+      if (cp.exitCode === null) cp.kill("SIGTERM");
+    } catch {}
   }
 }
 

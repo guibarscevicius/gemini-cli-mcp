@@ -85,6 +85,12 @@ describe("geminiHealth", () => {
     const result = await geminiHealth({});
     expect(result.binary.path).toBeNull();
   });
+
+  it("returns env as an empty object when no overrides are set", async () => {
+    runnerMock.getEnvOverrides.mockReturnValue({});
+    const result = await geminiHealth({});
+    expect(result.env).toEqual({});
+  });
 });
 
 describe("dispatcher routing for gemini-health", () => {

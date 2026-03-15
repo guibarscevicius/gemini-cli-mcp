@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { sessionStore, SESSION_TTL_MS } from "../session-store.js";
+import { mcpLog } from "../logging.js";
 
 const GeminiListSessionsSchema = z.object({}).optional();
 
@@ -12,7 +14,17 @@ export interface GeminiListSessionsOutput {
 export async function geminiListSessions(input: unknown): Promise<GeminiListSessionsOutput> {
   GeminiListSessionsSchema.parse(input);
 
-  const sessions = sessionStore.listSessions().map((session) => ({
+  let rawSessions: ReturnType<typeof sessionStore.listSessions>;
+  try {
+    rawSessions = sessionStore.listSessions();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[gemini-cli-mcp] gemini-list-sessions: listSessions() failed: ${message}\n`);
+    mcpLog("error", "sessions", { event: "list_sessions_error", error: message });
+    throw new McpError(ErrorCode.InternalError, `Failed to list sessions: ${message}`);
+  }
+
+  const sessions = rawSessions.map((session) => ({
     ...session,
     expiresAt: session.lastAccessed + SESSION_TTL_MS,
   }));

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { Turn } from "../../src/session-store.js";
 
 const sessionStoreMock = vi.hoisted(() => ({
@@ -108,6 +108,7 @@ describe("geminiExport — lastN", () => {
 
     expect(result.lastN).toBe(2);
     expect(result.turnCount).toBe(2);
+    expect(result.totalTurnCount).toBe(4);
     expect(result.turns).toEqual(FOUR_TURNS.slice(-2));
     expect(JSON.parse(result.content)).toEqual(FOUR_TURNS.slice(-2));
   });
@@ -117,6 +118,7 @@ describe("geminiExport — lastN", () => {
     const result = await geminiExport({ sessionId: "sess-1", lastN: 10 });
 
     expect(result.turnCount).toBe(4);
+    expect(result.totalTurnCount).toBe(4);
     expect(result.turns).toEqual(FOUR_TURNS);
   });
 
@@ -169,6 +171,24 @@ describe("geminiExport — error cases", () => {
     await expect(
       handleCallTool("gemini-export", {})
     ).rejects.toMatchObject({
+      message: expect.stringContaining("Invalid arguments"),
+    });
+  });
+
+  it("throws McpError(InvalidParams) when lastN is 0", async () => {
+    await expect(
+      handleCallTool("gemini-export", { sessionId: "sess-1", lastN: 0 })
+    ).rejects.toMatchObject({
+      code: ErrorCode.InvalidParams,
+      message: expect.stringContaining("Invalid arguments"),
+    });
+  });
+
+  it("throws McpError(InvalidParams) when lastN is negative", async () => {
+    await expect(
+      handleCallTool("gemini-export", { sessionId: "sess-1", lastN: -1 })
+    ).rejects.toMatchObject({
+      code: ErrorCode.InvalidParams,
       message: expect.stringContaining("Invalid arguments"),
     });
   });

@@ -178,6 +178,7 @@ export class WarmProcessPool {
     if (this.ready.length > 0) {
       const { wp, keepAliveInterval } = this.ready.shift()!;
       clearInterval(keepAliveInterval);
+      this.consecutiveSpawnFailures = 0;
       // Spawn replacement before returning so the next caller doesn't wait.
       if (!this.draining) this._spawnAndEnqueue();
       return Promise.resolve(wp);

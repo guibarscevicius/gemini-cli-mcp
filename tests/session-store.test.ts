@@ -121,6 +121,16 @@ describe("SessionStore", () => {
     expect(history).toContain("Assistant: assistant-25");
   });
 
+  it("formatHistory() returns empty history for corrupt session JSON", () => {
+    const id = "session-corrupt-history";
+    store.create(id);
+    (store as unknown as { db: { exec: (sql: string) => void } }).db.exec(
+      "UPDATE sessions SET turns = 'not-json' WHERE id = 'session-corrupt-history'"
+    );
+
+    expect(store.formatHistory(id)).toEqual({ history: "", truncated: false, totalTurns: 0 });
+  });
+
   it("SQLite persistence round-trip", () => {
     const dir = mkdtempSync(nodePath.join(os.tmpdir(), "gemini-session-store-"));
     const dbPath = nodePath.join(dir, "sessions.db");
@@ -269,6 +279,17 @@ describe("listSessions", () => {
     const sessions = s.listSessions();
     expect(sessions[0].id).toBe("ls-new");
     expect(sessions[1].id).toBe("ls-old");
+  });
+
+  it("returns turnCount 0 when stored turns JSON is corrupt", () => {
+    s.create("ls-corrupt");
+    (s as unknown as { db: { exec: (sql: string) => void } }).db.exec(
+      "UPDATE sessions SET turns = 'not-json' WHERE id = 'ls-corrupt'"
+    );
+
+    const sessions = s.listSessions();
+    const corrupt = sessions.find((session) => session.id === "ls-corrupt");
+    expect(corrupt?.turnCount).toBe(0);
   });
 });
 

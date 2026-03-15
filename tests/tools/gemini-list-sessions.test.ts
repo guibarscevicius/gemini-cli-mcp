@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 
 const sessionStoreMock = vi.hoisted(() => ({
   listSessions: vi.fn(),
@@ -80,5 +81,17 @@ describe("geminiListSessions", () => {
         expect(item).toHaveProperty(key);
       }
     }
+  });
+
+  it("wraps listSessions() failures as McpError(InternalError)", async () => {
+    sessionStoreMock.listSessions.mockImplementation(() => {
+      throw new Error("database is locked");
+    });
+
+    await expect(geminiListSessions({})).rejects.toThrow(McpError);
+    await expect(geminiListSessions({})).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: expect.stringContaining("Failed to list sessions: database is locked"),
+    });
   });
 });
