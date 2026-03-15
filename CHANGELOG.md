@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.6.0...gemini-cli-mcp-v0.6.1) (2026-03-15)
+
+
+### Bug Fixes
+
+* read version from package.json in health tests to survive Release Please bumps ([3135273](https://github.com/guibarscevicius/gemini-cli-mcp/commit/3135273d932e7645d5a5fd1e1202a4a204e711db))
+
 ## [0.6.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.5.0...gemini-cli-mcp-v0.6.0) (2026-03-15)
 
 
