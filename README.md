@@ -119,11 +119,13 @@ Input:
   expandRefs    boolean  Optional. Set to false to disable @file expansion. Default: true.
 
 Output:
-  jobId           string
-  pollIntervalMs  number
-  response        string   (wait: true — done)
-  partialResponse string   (wait: true — timeout)
-  timedOut        true     (wait: true — timeout)
+  jobId              string
+  pollIntervalMs     number
+  response           string   (wait: true — done)
+  partialResponse    string   (wait: true — timeout)
+  timedOut           true     (wait: true — timeout)
+  historyTruncated   boolean  Present and true when older turns were dropped due to GEMINI_MAX_HISTORY_TURNS.
+  historyTurnCount   number   Total turns in the session at the time of this reply (present when historyTruncated is true).
 ```
 
 Sessions auto-expire after 60 minutes of inactivity.
@@ -165,6 +167,117 @@ Output:
   jobId       string
   cancelled   boolean   true if the running subprocess was killed.
   alreadyDone boolean   true if the job had already completed before cancel arrived.
+```
+
+### `gemini-health` — server health and diagnostics
+
+```
+Input:
+  (none)
+
+Output:
+  binary.path         string | null   Absolute path to the gemini binary (null if only "gemini" on PATH).
+  env                 object          Active env overrides (GEMINI_MAX_CONCURRENT, etc.). Empty if all defaults.
+  pool.enabled        boolean         Whether the warm process pool is active.
+  pool.ready          number          Processes currently ready in the pool.
+  pool.size           number          Configured pool size.
+  pool.lastError      string | null   Last spawn error message (null when healthy).
+  pool.consecutiveFailures number     Consecutive spawn failures since last success.
+  concurrency.max     number          GEMINI_MAX_CONCURRENT value.
+  concurrency.active  number          Currently running Gemini subprocesses.
+  concurrency.queued  number          Requests waiting for a concurrency slot.
+  jobs.active         number          Jobs currently in "pending" state.
+  jobs.total          number          Total jobs tracked (all statuses).
+  jobs.byStatus       object          Counts by status: { pending, done, error, cancelled }.
+  sessions.total      number          Total sessions in the store.
+  server.uptime       number          Process uptime in seconds.
+  server.version      string          Package version.
+```
+
+### `gemini-list-sessions` — list active sessions
+
+```
+Input:
+  (none)
+
+Output:
+  sessions   array    Array of session objects, sorted by most recently accessed.
+    id             string   Session ID (pass to gemini-reply or gemini-export).
+    lastAccessed   string   ISO 8601 timestamp of the last turn.
+    turnCount      number   Number of turns stored in the session.
+    expiresAt      string   ISO 8601 timestamp when the session will expire (60 min after lastAccessed).
+  total      number   Total number of sessions.
+```
+
+### `gemini-export` — export session history
+
+```
+Input:
+  sessionId   string   Required. Session to export.
+  format      string   Optional. "json" (default) or "markdown".
+  lastN       number   Optional. Export only the last N turns (most recent). Omit for all turns.
+
+Output:
+  sessionId       string   The exported session ID.
+  turnCount       number   Number of turns included in the export.
+  totalTurnCount  number   Total turns in the session (present only when lastN is used).
+  format          string   The format used ("json" or "markdown").
+  turns           array    (format: "json") Array of { role, content } objects.
+  content         string   (format: "markdown") Formatted transcript as a markdown string.
+  exportedAt      string   ISO 8601 timestamp of the export.
+```
+
+### `gemini-batch` — parallel prompt processing
+
+```
+Input:
+  prompts      array    Required. Array of prompt strings to process in parallel.
+  model        string   Optional. Model to use for all prompts.
+  cwd          string   Optional. Working directory for @file references.
+  expandRefs   boolean  Optional. Set to false to disable @file expansion. Default: true.
+  wait         boolean  Optional. Block until all jobs complete (default: false).
+
+Output (wait: false — default):
+  jobs           array    Array of { jobId, index } objects — one per prompt.
+  pollIntervalMs number   Suggested polling interval in ms (2000).
+
+Output (wait: true):
+  results   array    Array of result objects, one per prompt (in order):
+    index     number    Position in the input prompts array.
+    status    string    "done" or "error".
+    response  string    Gemini's response (present when status is "done").
+    error     string    Error message (present when status is "error").
+  summary   object   { total, done, errors } counts.
+```
+
+### `gemini-research` — deep research with grounding
+
+Uses Gemini's built-in research capabilities for queries requiring up-to-date information or multi-source synthesis.
+
+```
+Input:
+  query         string   Required. The research question or topic.
+  depth         string   Optional. "quick", "standard" (default), or "deep".
+  model         string   Optional. Defaults to CLI default.
+  cwd           string   Optional. Working directory for @file references.
+  expandRefs    boolean  Optional. Set to false to disable @file expansion. Default: true.
+  wait          boolean  Optional. Block until done (default: false).
+  waitTimeoutMs number   Optional. Max ms to wait when wait=true (default: 90000).
+
+Output (async — default):
+  jobId          string   Poll with gemini-poll or cancel with gemini-cancel.
+  pollIntervalMs number   Suggested polling interval in ms (2000).
+
+Output (wait: true — done):
+  jobId          string
+  response       string   Gemini's complete research response.
+  pollIntervalMs number
+
+Output (wait: true — timeout):
+  jobId           string
+  partialResponse string   Partial output collected before timeout (may be empty).
+  timedOut        true
+  pollIntervalMs  number
 ```
 
 ## Async workflow
