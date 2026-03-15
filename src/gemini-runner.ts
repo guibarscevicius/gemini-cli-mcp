@@ -754,11 +754,11 @@ function escapeGlobSegments(rawPath: string): string {
  */
 export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
   const fileRefs = extractFileRefs(prompt);
-  // Always expand image file refs ourselves (CLI --prompt mode doesn't handle binary files).
-  // For text-only single-ref prompts, let the CLI handle it natively.
+  // Image @file refs are always passed through to the CLI for native multimodal handling.
+  // Only expand text refs ourselves when there are 2+ of them (single text ref → CLI handles natively).
   const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
-  const hasImageRef = fileRefs.some((ref) => IMAGE_EXT_RE.test(ref));
-  if (fileRefs.length < 2 && !hasImageRef) return prompt;
+  const textRefs = fileRefs.filter((ref) => !IMAGE_EXT_RE.test(ref));
+  if (textRefs.length < 2) return prompt;
 
   const cwdResolved = nodePath.resolve(cwd);
   let realCwd: string;
@@ -822,27 +822,9 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
             const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"]);
 
             if (IMAGE_EXTENSIONS.has(ext)) {
-              // Read image as binary and base64-encode for multimodal Gemini input
-              let buf: Buffer;
-              try {
-                buf = await readFile(realAbsPath);
-              } catch (err) {
-                const code = (err as { code?: string }).code ?? "unknown";
-                const detail = readErrorDetails[code] ?? `read failed (${code})`;
-                throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
-              }
-              const mimeTypes: Record<string, string> = {
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".webp": "image/webp",
-                ".gif": "image/gif",
-                ".bmp": "image/bmp",
-                ".svg": "image/svg+xml",
-              };
-              const mime = mimeTypes[ext] ?? "application/octet-stream";
-              const b64 = buf.toString("base64");
-              return `Image from @${relPath} (${mime}, ${buf.length} bytes):\ndata:${mime};base64,${b64}`;
+              // Skip image files — they are passed through as @file refs for the
+              // Gemini CLI to handle natively as multimodal image inputs.
+              return null;
             }
 
             let content: string;
@@ -860,9 +842,10 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
       })
     )
   );
-  const sections = sectionGroups.flat();
+  const sections = sectionGroups.flat().filter((s): s is string => s !== null);
 
-  // Mask @tokens in the prompt text to prevent double expansion by the CLI
+  // Mask @tokens in the prompt text to prevent double expansion by the CLI.
+  // Image @file refs are NOT masked — they must pass through for native CLI multimodal handling.
   // We use a replacement function with the same regex to ensure consistency.
   GREEDY_AT_RE.lastIndex = 0;
   const maskedPrompt = prompt.replace(GREEDY_AT_RE, (match, pathToken) => {
@@ -871,6 +854,8 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
     if (NON_PATH_CHARS_RE.test(pathToken)) return match;
     const balanced = extractBalancedPath(pathToken);
     if (/[/.]/.test(balanced)) {
+      // Don't mask image refs — let them pass through to the CLI for multimodal handling
+      if (IMAGE_EXT_RE.test(balanced)) return match;
       // Replace the matched token (including @) with just the balanced path.
       // We keep the rest of the original token if any (punctuation that was trimmed).
       return match.replace(`@${balanced}`, balanced);
@@ -880,6 +865,7 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
 
   // Sentinel delimiters give the model a clear boundary for injected content.
   // The "Content from @<relPath>:" header preserves the original @token reference.
+  if (sections.length === 0) return maskedPrompt;
   const referenceBlock = `\n\n[REFERENCE_CONTENT_START]\n${sections.join("\n\n")}\n[REFERENCE_CONTENT_END]`;
   return maskedPrompt + referenceBlock;
 }
