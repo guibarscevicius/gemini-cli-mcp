@@ -56,3 +56,15 @@ Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed rel
 | `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. When set, auto-discovery is skipped. Useful for nvm/fnm users where gemini isn't on the MCP server's PATH. |
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained in memory (ms) |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection sweep interval (ms) |
+| `GEMINI_SUBPROCESS_TIMEOUT_MS` | `1200000` | Subprocess kill timer (ms). The single timeout that controls how long a Gemini CLI subprocess is allowed to run before SIGTERM+SIGKILL. Complex code review tasks with tool calls routinely take 5-15 min. |
+
+## Fork notes (RemarkRemedy/gemini-cli-mcp)
+
+This is a fork of `guibarscevicius/gemini-cli-mcp` with patches for subprocess lifecycle management.
+
+Running the MCP server from a local `dist/index.js` instead of npx has two benefits: (1) patches survive forever since they're in your own git repo, and (2) startup is faster, no npx resolution/cache lookup. The tradeoff is you need to `cd gemini-cli-mcp && npm run build` after pulling upstream changes. To sync with upstream: `git fetch upstream && git merge upstream/main && npm run build`.
+
+### Patches applied
+1. `TIMEOUT_MS` changed from hardcoded 300s to env-configurable (default 1200s via `GEMINI_SUBPROCESS_TIMEOUT_MS`)
+2. SIGKILL escalation 5s after SIGTERM on cold-spawn timeout, warm-pool timeout, and pool drain
+3. Test updated to expect 1200s default

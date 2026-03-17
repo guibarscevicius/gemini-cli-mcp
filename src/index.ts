@@ -29,7 +29,9 @@ import { geminiResearchToolDefinition } from "./tools/gemini-research.js";
 import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
+import { setJobListChangedCallback } from "./job-store.js";
 import { warmPool } from "./gemini-runner.js";
+import { IdleShutdownController, parseIdleShutdownMs } from "./idle-shutdown.js";
 import { initMcpLogger, setMcpLogLevel } from "./logging.js";
 import { STATIC_RESOURCES, RESOURCE_TEMPLATES, readResource } from "./resources.js";
 import { listPrompts, getPrompt } from "./prompts.js";
@@ -39,9 +41,38 @@ const _require = createRequire(import.meta.url);
 const { version: pkgVersion } = _require("../package.json") as { version: string };
 
 type ToolServer = Pick<Server, "setRequestHandler" | "getClientCapabilities" | "elicitInput">;
+type IdleStateTracker = Pick<
+  IdleShutdownController,
+  "noteActivity" | "start" | "stop" | "updateActiveJobs"
+>;
+
+let idleStateTracker: IdleStateTracker | null = null;
+let shuttingDown = false;
+
+function noteServerActivity(): void {
+  idleStateTracker?.noteActivity();
+}
+
+function syncIdleJobs(): void {
+  idleStateTracker?.updateActiveJobs(jobStore.getJobStats().active);
+}
+
+function withActivity<TRequest, TResponse>(
+  handler: (request: TRequest, extra?: unknown) => Promise<TResponse>
+): (request: TRequest, extra?: unknown) => Promise<TResponse> {
+  return async (request, extra) => {
+    noteServerActivity();
+    return handler(request, extra);
+  };
+}
+
+export function setIdleStateTrackerForTests(tracker: IdleStateTracker | null): void {
+  idleStateTracker = tracker;
+  shuttingDown = false;
+}
 
 export function registerToolHandlers(server: ToolServer): void {
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler(ListToolsRequestSchema, withActivity(async () => ({
     tools: [
       askGeminiToolDefinition,
       geminiReplyToolDefinition,
@@ -53,15 +84,21 @@ export function registerToolHandlers(server: ToolServer): void {
       geminiBatchToolDefinition,
       geminiResearchToolDefinition,
     ],
-  }));
+  })));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  server.setRequestHandler(CallToolRequestSchema, withActivity(async (request, extra) => {
     const { name, arguments: args } = request.params;
     const progressToken = request.params._meta?.progressToken;
-    const requestId = extra?.requestId as string | number | undefined;
+    const extraCtx = extra as
+      | {
+          requestId?: string | number;
+          sendNotification?: (notification: unknown) => Promise<void>;
+        }
+      | undefined;
+    const requestId = extraCtx?.requestId;
     const clientCaps = server.getClientCapabilities();
     const ctx = {
-      sendNotification: extra?.sendNotification as ((n: unknown) => Promise<void>) | undefined,
+      sendNotification: extraCtx?.sendNotification,
       progressToken,
       requestId,
       elicit: clientCaps?.elicitation
@@ -69,7 +106,7 @@ export function registerToolHandlers(server: ToolServer): void {
         : undefined,
     };
     return handleCallTool(name, args, ctx);
-  });
+  }));
 }
 
 export function createServer(): Server {
@@ -87,25 +124,25 @@ export function createServer(): Server {
   );
   initMcpLogger(server);
 
-  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+  server.setRequestHandler(ListResourcesRequestSchema, withActivity(async () => ({
     resources: STATIC_RESOURCES,
-  }));
+  })));
 
-  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, withActivity(async () => ({
     resourceTemplates: RESOURCE_TEMPLATES,
-  }));
+  })));
 
-  server.setRequestHandler(ReadResourceRequestSchema, async (req) =>
+  server.setRequestHandler(ReadResourceRequestSchema, withActivity(async (req) =>
     readResource(req.params.uri)
-  );
+  ));
 
-  server.setRequestHandler(ListPromptsRequestSchema, async () =>
+  server.setRequestHandler(ListPromptsRequestSchema, withActivity(async () =>
     listPrompts()
-  );
+  ));
 
-  server.setRequestHandler(GetPromptRequestSchema, async (req) =>
+  server.setRequestHandler(GetPromptRequestSchema, withActivity(async (req) =>
     getPrompt(req.params.name, req.params.arguments)
-  );
+  ));
 
   const notifyResourceListChanged = () => {
     try {
@@ -120,14 +157,18 @@ export function createServer(): Server {
       );
     }
   };
-  jobStore.setJobListChangedCallback(notifyResourceListChanged);
+  setJobListChangedCallback(() => {
+    notifyResourceListChanged();
+    syncIdleJobs();
+  });
   sessionStore.setListChangedCallback(notifyResourceListChanged);
-  server.setRequestHandler(SetLevelRequestSchema, async (req) => {
+  server.setRequestHandler(SetLevelRequestSchema, withActivity(async (req) => {
     setMcpLogLevel(req.params.level);
     return {};
-  });
+  }));
   registerToolHandlers(server);
   server.setNotificationHandler(CancelledNotificationSchema, async (notification) => {
+    noteServerActivity();
     const requestId = notification.params?.requestId;
     if (requestId === undefined) {
       process.stderr.write(
@@ -157,7 +198,12 @@ export function createServer(): Server {
 const server = createServer();
 
 async function shutdown(signal: string): Promise<void> {
-  process.stderr.write(`[gemini-cli-mcp] received ${signal}, draining process pool…\n`);
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  idleStateTracker?.stop();
+  process.stderr.write(`[gemini-cli-mcp] shutting down (${signal}), draining process pool...\n`);
   if (warmPool !== null) {
     await warmPool.drain();
   }
@@ -166,9 +212,35 @@ async function shutdown(signal: string): Promise<void> {
 
 async function main() {
   const transport = new StdioServerTransport();
+  shuttingDown = false;
   await server.connect(transport);
   // stderr is safe to use — MCP protocol uses stdout/stdin only
   process.stderr.write("gemini-cli-mcp server started\n");
+
+  const idleShutdownMs = parseIdleShutdownMs(process.env.GEMINI_MCP_IDLE_SHUTDOWN_MS);
+  if (idleShutdownMs > 0) {
+    idleStateTracker = new IdleShutdownController(idleShutdownMs, async () => {
+      if (jobStore.getJobStats().active > 0) {
+        syncIdleJobs();
+        return;
+      }
+      try {
+        await shutdown(`idle timeout after ${idleShutdownMs}ms`);
+      } catch (err) {
+        process.stderr.write(
+          `[gemini-cli-mcp] idle shutdown error: ${err instanceof Error ? err.message : String(err)}\n`
+        );
+        process.exit(1);
+      }
+    });
+    idleStateTracker.start();
+    syncIdleJobs();
+    process.stderr.write(
+      `[gemini-cli-mcp] idle shutdown enabled after ${idleShutdownMs}ms of inactivity\n`
+    );
+  } else {
+    idleStateTracker = null;
+  }
 
   process.on("SIGTERM", () => {
     shutdown("SIGTERM").catch((err) => {

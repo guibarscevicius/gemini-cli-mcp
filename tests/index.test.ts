@@ -9,7 +9,7 @@ vi.mock("../src/dispatcher.js", () => ({
 }));
 
 import { handleCallTool } from "../src/dispatcher.js";
-import { createServer, registerToolHandlers } from "../src/index.js";
+import { createServer, registerToolHandlers, setIdleStateTrackerForTests } from "../src/index.js";
 import { _resetMcpLogger } from "../src/logging.js";
 import { STATIC_RESOURCES, RESOURCE_TEMPLATES } from "../src/resources.js";
 import { askGeminiToolDefinition } from "../src/tools/ask-gemini.js";
@@ -31,11 +31,24 @@ const mockHandleCallTool = vi.mocked(handleCallTool);
 
 describe("index wiring", () => {
   let handlers: Map<unknown, RequestHandler>;
+  let tracker: {
+    noteActivity: ReturnType<typeof vi.fn>;
+    start: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
+    updateActiveJobs: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     handlers = new Map();
     vi.clearAllMocks();
     _resetMcpLogger();
+    tracker = {
+      noteActivity: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      updateActiveJobs: vi.fn(),
+    };
+    setIdleStateTrackerForTests(tracker);
     mockHandleCallTool.mockResolvedValue({
       content: [{ type: "text", text: "ok" }],
     });
@@ -95,6 +108,7 @@ describe("index wiring", () => {
       args,
       expect.objectContaining({ progressToken: undefined, requestId: undefined, elicit: undefined })
     );
+    expect(tracker.noteActivity).toHaveBeenCalledTimes(1);
   });
 
   it("passes elicit function to ctx when client supports elicitation", async () => {
@@ -129,6 +143,16 @@ describe("index wiring", () => {
       { prompt: "hello" },
       expect.objectContaining({ elicit: expect.any(Function) })
     );
+    expect(tracker.noteActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks ListTools activity", async () => {
+    const listTools = handlers.get(ListToolsRequestSchema);
+    expect(listTools).toBeDefined();
+
+    await listTools!({ params: {} });
+
+    expect(tracker.noteActivity).toHaveBeenCalledTimes(1);
   });
 
   it("createServer includes logging, resources, prompts, and elicitation capabilities", () => {
@@ -176,6 +200,7 @@ describe("index wiring", () => {
     const handler = server._requestHandlers.get("resources/list")!;
     const result = await handler({ method: "resources/list", params: {} });
     expect(result).toEqual({ resources: STATIC_RESOURCES });
+    expect(tracker.noteActivity).toHaveBeenCalled();
   });
 
   it("ListResourceTemplates handler returns RESOURCE_TEMPLATES", async () => {
@@ -185,5 +210,42 @@ describe("index wiring", () => {
     const handler = server._requestHandlers.get("resources/templates/list")!;
     const result = await handler({ method: "resources/templates/list", params: {} });
     expect(result).toEqual({ resourceTemplates: RESOURCE_TEMPLATES });
+    expect(tracker.noteActivity).toHaveBeenCalled();
+  });
+
+  it("marks resource, prompt, and settings requests as activity", async () => {
+    const server = createServer() as unknown as {
+      _requestHandlers: Map<string, (req: unknown) => Promise<unknown>>;
+    };
+
+    await server._requestHandlers.get("resources/list")!({
+      method: "resources/list",
+      params: {},
+    });
+    await server._requestHandlers.get("resources/templates/list")!({
+      method: "resources/templates/list",
+      params: {},
+    });
+    await server._requestHandlers.get("resources/read")!({
+      method: "resources/read",
+      params: { uri: STATIC_RESOURCES[0]?.uri },
+    });
+    await server._requestHandlers.get("prompts/list")!({
+      method: "prompts/list",
+      params: {},
+    });
+    await server._requestHandlers.get("prompts/get")!({
+      method: "prompts/get",
+      params: {
+        name: "code-review",
+        arguments: { files: "src/index.ts" },
+      },
+    });
+    await server._requestHandlers.get("logging/setLevel")!({
+      method: "logging/setLevel",
+      params: { level: "info" },
+    });
+
+    expect(tracker.noteActivity).toHaveBeenCalledTimes(6);
   });
 });

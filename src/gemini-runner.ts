@@ -23,8 +23,9 @@ export class SemaphoreTimeoutError extends Error {
   }
 }
 
-// 300 s - allows Gemini 2.5 Pro deep-reasoning tasks (can take 2–3 min before first token)
-const TIMEOUT_MS = 300_000;
+// Configurable via GEMINI_SUBPROCESS_TIMEOUT_MS (default 1200 s / 20 min).
+// Complex code review tasks with tool calls routinely take 5–15 min.
+const TIMEOUT_MS = parseInt(process.env.GEMINI_SUBPROCESS_TIMEOUT_MS ?? "1200000", 10);
 
 // Linux MAX_ARG_STRLEN = PAGE_SIZE × 32 = 131,072 bytes (~128 KB) caps any single exec arg.
 // Prompts larger than this threshold are written to a temp file and referenced via @path
@@ -351,6 +352,50 @@ function extractErrorDetail(
   return "gemini error (unknown)";
 }
 
+// ── Thinking loop detection ──────────────────────────────────────────────────
+// Gemini's thinking mode can enter a degenerate loop where the model repeats
+// short phrases ("I will output.\nEnd.\n") indefinitely.  We detect this by
+// checking the tail of the accumulated response for a short substring that
+// appears many times in quick succession.
+//
+// Configurable via GEMINI_THINKING_LOOP_INTERVAL_MS (check interval, default 60s)
+// and GEMINI_THINKING_LOOP_DISABLED=1 to disable entirely.
+
+const THINKING_LOOP_CHECK_MS = parseInt(
+  process.env.GEMINI_THINKING_LOOP_INTERVAL_MS ?? "60000",
+  10
+);
+const THINKING_LOOP_DISABLED = process.env.GEMINI_THINKING_LOOP_DISABLED === "1";
+
+/**
+ * Returns true if the tail of `text` contains a short repeated phrase,
+ * indicating the model is stuck in a thinking loop.
+ *
+ * Algorithm: take the last 2 KB of text, find any 20-60 char substring that
+ * appears 5+ times.  This catches patterns like "I will output.\nEnd.\n"
+ * repeated dozens of times.
+ */
+export function detectThinkingLoop(text: string): boolean {
+  if (text.length < 500) return false;
+  const tail = text.slice(-2048);
+
+  // Try phrase lengths 20, 30, 40, 50, 60
+  for (const len of [20, 30, 40, 50, 60]) {
+    // Take the last `len` chars as a candidate repeated phrase
+    const candidate = tail.slice(-len);
+    if (candidate.trim().length < 10) continue;
+
+    let count = 0;
+    let idx = 0;
+    while ((idx = tail.indexOf(candidate, idx)) !== -1) {
+      count++;
+      idx += candidate.length;
+    }
+    if (count >= 5) return true;
+  }
+  return false;
+}
+
 export interface GeminiOptions {
   model?: string;
   cwd?: string;
@@ -386,18 +431,41 @@ export function runWithWarmProcess(
     let lineBuffer = "";
     let settled = false;
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let loopCheckHandle: ReturnType<typeof setInterval> | undefined;
 
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (loopCheckHandle !== undefined) clearInterval(loopCheckHandle);
       fn();
     };
 
     timeoutHandle = setTimeout(() => {
-      try { cp.kill("SIGTERM"); } catch { /* already dead */ }
+      try {
+        cp.kill("SIGTERM");
+        setTimeout(() => { try { cp.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
+      } catch { /* already dead */ }
       settle(() => reject(new Error(`Gemini warm process timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
+
+    // Periodic thinking loop detection — kills the process and returns
+    // accumulated content when the model is stuck repeating itself.
+    if (!THINKING_LOOP_DISABLED && THINKING_LOOP_CHECK_MS > 0) {
+      loopCheckHandle = setInterval(() => {
+        if (settled) return;
+        if (detectThinkingLoop(accumulated)) {
+          process.stderr.write(
+            `[gemini-cli-mcp] thinking loop detected after ${accumulated.length} chars — killing process\n`
+          );
+          try {
+            cp.kill("SIGTERM");
+            setTimeout(() => { try { cp.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
+          } catch { /* already dead */ }
+          settle(() => resolve(accumulated));
+        }
+      }, THINKING_LOOP_CHECK_MS);
+    }
 
     cp.stdout?.on("data", (data: Buffer) => {
       lineBuffer += data.toString("utf8");
@@ -509,20 +577,39 @@ export function spawnGemini(
   let lineBuffer = "";
   let settled = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let loopCheckHandle: ReturnType<typeof setInterval> | undefined;
 
   const settle = (fn: () => void) => {
     if (settled) return;
     settled = true;
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    if (loopCheckHandle !== undefined) clearInterval(loopCheckHandle);
     fn();
   };
 
   timeoutHandle = setTimeout(() => {
     cp.kill("SIGTERM");
+    setTimeout(() => { try { cp.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
     settle(() =>
       onError(new Error(`Gemini subprocess timed out after ${spawnOpts.timeout}ms`))
     );
   }, spawnOpts.timeout);
+
+  // Periodic thinking loop detection — kills the process and returns
+  // accumulated content when the model is stuck repeating itself.
+  if (!THINKING_LOOP_DISABLED && THINKING_LOOP_CHECK_MS > 0) {
+    loopCheckHandle = setInterval(() => {
+      if (settled) return;
+      if (detectThinkingLoop(accumulated)) {
+        process.stderr.write(
+          `[gemini-cli-mcp] thinking loop detected after ${accumulated.length} chars — killing process\n`
+        );
+        cp.kill("SIGTERM");
+        setTimeout(() => { try { cp.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
+        settle(() => onDone(accumulated));
+      }
+    }, THINKING_LOOP_CHECK_MS);
+  }
 
   cp.stdout?.on("data", (data: Buffer) => {
     lineBuffer += data.toString("utf8");
@@ -749,7 +836,11 @@ function escapeGlobSegments(rawPath: string): string {
  */
 export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
   const fileRefs = extractFileRefs(prompt);
-  if (fileRefs.length < 2) return prompt;
+  // Image @file refs are always passed through to the CLI for native multimodal handling.
+  // Only expand text refs ourselves when there are 2+ of them (single text ref → CLI handles natively).
+  const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+  const textRefs = fileRefs.filter((ref) => !IMAGE_EXT_RE.test(ref));
+  if (textRefs.length < 2) return prompt;
 
   const cwdResolved = nodePath.resolve(cwd);
   let realCwd: string;
@@ -807,6 +898,17 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
               EISDIR: "is a directory — use a glob pattern like @src/**/*.ts",
               EACCES: "permission denied",
             };
+
+            const relPath = nodePath.relative(realCwd, realAbsPath);
+            const ext = nodePath.extname(realAbsPath).toLowerCase();
+            const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"]);
+
+            if (IMAGE_EXTENSIONS.has(ext)) {
+              // Skip image files — they are passed through as @file refs for the
+              // Gemini CLI to handle natively as multimodal image inputs.
+              return null;
+            }
+
             let content: string;
             try {
               content = await readFile(realAbsPath, "utf-8");
@@ -816,16 +918,16 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
               throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
             }
 
-            const relPath = nodePath.relative(realCwd, realAbsPath);
             return `Content from @${relPath}:\n${content}`;
           })
         );
       })
     )
   );
-  const sections = sectionGroups.flat();
+  const sections = sectionGroups.flat().filter((s): s is string => s !== null);
 
-  // Mask @tokens in the prompt text to prevent double expansion by the CLI
+  // Mask @tokens in the prompt text to prevent double expansion by the CLI.
+  // Image @file refs are NOT masked — they must pass through for native CLI multimodal handling.
   // We use a replacement function with the same regex to ensure consistency.
   GREEDY_AT_RE.lastIndex = 0;
   const maskedPrompt = prompt.replace(GREEDY_AT_RE, (match, pathToken) => {
@@ -834,6 +936,8 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
     if (NON_PATH_CHARS_RE.test(pathToken)) return match;
     const balanced = extractBalancedPath(pathToken);
     if (/[/.]/.test(balanced)) {
+      // Don't mask image refs — let them pass through to the CLI for multimodal handling
+      if (IMAGE_EXT_RE.test(balanced)) return match;
       // Replace the matched token (including @) with just the balanced path.
       // We keep the rest of the original token if any (punctuation that was trimmed).
       return match.replace(`@${balanced}`, balanced);
@@ -843,6 +947,7 @@ export async function expandFileRefs(prompt: string, cwd: string): Promise<strin
 
   // Sentinel delimiters give the model a clear boundary for injected content.
   // The "Content from @<relPath>:" header preserves the original @token reference.
+  if (sections.length === 0) return maskedPrompt;
   const referenceBlock = `\n\n[REFERENCE_CONTENT_START]\n${sections.join("\n\n")}\n[REFERENCE_CONTENT_END]`;
   return maskedPrompt + referenceBlock;
 }
