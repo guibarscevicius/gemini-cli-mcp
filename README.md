@@ -192,6 +192,12 @@ Output:
   sessions.total      number          Total sessions in the store.
   server.uptime       number          Process uptime in seconds.
   server.version      string          Package version.
+  cli.version            string | null   Detected CLI version (e.g. "0.34.0").
+  cli.minSupported       string          Minimum supported version ("0.30.0").
+  cli.versionOk          boolean         Whether the detected version meets the minimum.
+  cli.detectedFlags      number          Number of flags found in --help output.
+  cli.activeAdaptations  array           Flag adaptations in effect (e.g. "--approval-mode yolo (replaces --yolo)").
+  cli.detectionError     string | null   Error message if detection failed.
 ```
 
 ### `gemini-list-sessions` — list active sessions
