@@ -95,9 +95,9 @@ function parseCustomModels(raw: string): ModelInfo[] {
     }));
 }
 
-export async function geminiListModels(
+export function geminiListModels(
   input: unknown
-): Promise<GeminiListModelsOutput> {
+): GeminiListModelsOutput {
   const parsed = GeminiListModelsSchema.parse(input);
   const filter = parsed?.filter?.toLowerCase();
 

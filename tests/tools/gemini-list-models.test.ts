@@ -4,6 +4,7 @@ import {
   geminiListModels,
   geminiListModelsToolDefinition,
 } from "../../src/tools/gemini-list-models.js";
+import { handleCallTool } from "../../src/dispatcher.js";
 
 describe("gemini-list-models", () => {
   let originalModels: string | undefined;
@@ -122,10 +123,8 @@ describe("gemini-list-models", () => {
       expect(result.total).toBe(9);
     });
 
-    it("rejects non-string filter", async () => {
-      await expect(
-        geminiListModels({ filter: 123 })
-      ).rejects.toThrow(ZodError);
+    it("rejects non-string filter", () => {
+      expect(() => geminiListModels({ filter: 123 })).toThrow(ZodError);
     });
   });
 
@@ -152,5 +151,38 @@ describe("gemini-list-models", () => {
           .required
       ).toEqual(["models", "total", "source"]);
     });
+  });
+
+  describe("GEMINI_MODELS edge cases", () => {
+    it("returns empty custom list when GEMINI_MODELS is whitespace-only", async () => {
+      process.env.GEMINI_MODELS = "  ";
+      const result = await geminiListModels({});
+      expect(result.source).toBe("custom");
+      expect(result.total).toBe(0);
+      expect(result.models).toEqual([]);
+    });
+  });
+});
+
+describe("dispatcher routing for gemini-list-models", () => {
+  it("routes gemini-list-models through handleCallTool and returns structuredContent", async () => {
+    const result = await handleCallTool("gemini-list-models", {});
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].type).toBe("text");
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.source).toBe("curated");
+    expect(parsed.models).toBeInstanceOf(Array);
+    expect(parsed.total).toBe(9);
+    expect(result.structuredContent).toEqual(parsed);
+  });
+
+  it("passes filter through dispatcher", async () => {
+    const result = await handleCallTool("gemini-list-models", { filter: "pro" });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.total).toBe(3);
+    expect(parsed.models.every((m: { id: string }) => m.id.includes("pro"))).toBe(true);
   });
 });
