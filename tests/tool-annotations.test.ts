@@ -4,22 +4,25 @@ import { geminiReplyToolDefinition } from "../src/tools/gemini-reply.js";
 import { geminiPollToolDefinition } from "../src/tools/gemini-poll.js";
 import { geminiCancelToolDefinition } from "../src/tools/gemini-cancel.js";
 import { geminiHealthToolDefinition } from "../src/tools/gemini-health.js";
+import { geminiListModelsToolDefinition } from "../src/tools/gemini-list-models.js";
 
 describe("tool annotations", () => {
-  it("all 5 tools have annotations defined", () => {
+  it("all 6 tools have annotations defined", () => {
     expect(askGeminiToolDefinition.annotations).toBeDefined();
     expect(geminiReplyToolDefinition.annotations).toBeDefined();
     expect(geminiPollToolDefinition.annotations).toBeDefined();
     expect(geminiCancelToolDefinition.annotations).toBeDefined();
     expect(geminiHealthToolDefinition.annotations).toBeDefined();
+    expect(geminiListModelsToolDefinition.annotations).toBeDefined();
   });
 
-  it("all 5 tools expose outputSchema with expected required fields", () => {
+  it("all 6 tools expose outputSchema with expected required fields", () => {
     expect(askGeminiToolDefinition.outputSchema).toBeDefined();
     expect(geminiReplyToolDefinition.outputSchema).toBeDefined();
     expect(geminiPollToolDefinition.outputSchema).toBeDefined();
     expect(geminiCancelToolDefinition.outputSchema).toBeDefined();
     expect(geminiHealthToolDefinition.outputSchema).toBeDefined();
+    expect(geminiListModelsToolDefinition.outputSchema).toBeDefined();
 
     expect((askGeminiToolDefinition.outputSchema as { required: string[] }).required).toEqual([
       "jobId",
@@ -45,6 +48,11 @@ describe("tool annotations", () => {
       "jobs",
       "sessions",
       "server",
+    ]);
+    expect((geminiListModelsToolDefinition.outputSchema as { required: string[] }).required).toEqual([
+      "models",
+      "total",
+      "source",
     ]);
   });
 
@@ -120,6 +128,22 @@ describe("tool annotations", () => {
     it("has correct annotations", () => {
       expect(geminiHealthToolDefinition.annotations).toEqual({
         title: "Get Gemini Health",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
+    });
+  });
+
+  describe("gemini-list-models", () => {
+    it("has correct top-level title", () => {
+      expect(geminiListModelsToolDefinition.title).toBe("List Gemini Models");
+    });
+
+    it("has correct annotations", () => {
+      expect(geminiListModelsToolDefinition.annotations).toEqual({
+        title: "List Gemini Models",
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
