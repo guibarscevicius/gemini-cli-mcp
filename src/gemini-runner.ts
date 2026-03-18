@@ -245,6 +245,7 @@ export function getEnvOverrides(): Record<string, unknown> {
   if (sessionDb !== DEFAULT_SESSION_DB) overrides.GEMINI_SESSION_DB = sessionDb;
 
   if (process.env.GEMINI_BINARY) overrides.GEMINI_BINARY = process.env.GEMINI_BINARY;
+  if (process.env.GEMINI_MODELS) overrides.GEMINI_MODELS = process.env.GEMINI_MODELS;
 
   return overrides;
 }

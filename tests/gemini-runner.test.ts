@@ -1929,3 +1929,32 @@ describe("temp file cleanup on large prompts", () => {
     }
   });
 });
+
+// ── getEnvOverrides – GEMINI_MODELS and GEMINI_BINARY passthrough ────────────
+
+describe("getEnvOverrides env passthrough", () => {
+  it("includes GEMINI_MODELS in overrides when set", async () => {
+    vi.resetModules();
+    process.env.GEMINI_MODELS = "model-a,model-b";
+    try {
+      const { getEnvOverrides } = await import("../src/gemini-runner.js");
+      const overrides = getEnvOverrides();
+      expect(overrides.GEMINI_MODELS).toBe("model-a,model-b");
+    } finally {
+      delete process.env.GEMINI_MODELS;
+      vi.resetModules();
+    }
+  });
+
+  it("omits GEMINI_MODELS from overrides when not set", async () => {
+    vi.resetModules();
+    delete process.env.GEMINI_MODELS;
+    try {
+      const { getEnvOverrides } = await import("../src/gemini-runner.js");
+      const overrides = getEnvOverrides();
+      expect(overrides).not.toHaveProperty("GEMINI_MODELS");
+    } finally {
+      vi.resetModules();
+    }
+  });
+});
