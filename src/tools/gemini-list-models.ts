@@ -27,9 +27,27 @@ export interface GeminiListModelsOutput {
 
 const DEFAULT_MODELS: ModelInfo[] = [
   {
+    id: "gemini-3.1-pro-preview",
+    description: "Most capable reasoning model with agentic capabilities",
+    tier: "deep",
+    notes: null,
+  },
+  {
     id: "gemini-3-flash-preview",
-    description: "Fast, high-quality general purpose model (default)",
+    description: "Fast frontier-class performance at low cost (default)",
     tier: "fast",
+    notes: null,
+  },
+  {
+    id: "gemini-3.1-flash-lite-preview",
+    description: "Cost-efficient lightweight model for high-throughput tasks",
+    tier: "fast",
+    notes: null,
+  },
+  {
+    id: "gemini-2.5-pro",
+    description: "Advanced reasoning model for complex tasks",
+    tier: "deep",
     notes: null,
   },
   {
@@ -39,28 +57,28 @@ const DEFAULT_MODELS: ModelInfo[] = [
     notes: null,
   },
   {
-    id: "gemini-2.5-pro",
-    description: "Deep reasoning model for complex tasks",
-    tier: "deep",
-    notes: "slow ~60s response time",
-  },
-  {
-    id: "gemini-3-pro-preview",
-    description: "Advanced reasoning with broad capabilities",
-    tier: "balanced",
+    id: "gemini-2.5-flash-lite",
+    description: "Budget-friendly model with fastest response times",
+    tier: "fast",
     notes: null,
   },
   {
-    id: "gemini-3.1-pro-preview",
-    description: "Deep reasoning with ARC-AGI-2 and GPQA strength",
+    id: "gemini-3-pro-preview",
+    description: "Redirects to gemini-3.1-pro-preview since March 9, 2026",
     tier: "deep",
-    notes: "may not be available on all plans",
+    notes: "deprecated",
   },
   {
-    id: "gemini-3.1-flash-lite",
-    description: "Cost-efficient lightweight model",
+    id: "gemini-2.0-flash",
+    description: "Previous generation flash model",
     tier: "fast",
-    notes: "may not be available on all plans",
+    notes: "retiring June 1, 2026",
+  },
+  {
+    id: "gemini-2.0-flash-lite",
+    description: "Previous generation lite model",
+    tier: "fast",
+    notes: "retiring June 1, 2026",
   },
 ];
 

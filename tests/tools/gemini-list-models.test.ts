@@ -25,8 +25,8 @@ describe("gemini-list-models", () => {
     it("returns all default models with correct structure", async () => {
       const result = await geminiListModels({});
       expect(result.source).toBe("curated");
-      expect(result.total).toBe(6);
-      expect(result.models).toHaveLength(6);
+      expect(result.total).toBe(9);
+      expect(result.models).toHaveLength(9);
 
       for (const model of result.models) {
         expect(model).toHaveProperty("id");
@@ -40,19 +40,22 @@ describe("gemini-list-models", () => {
     it("includes the expected model IDs", async () => {
       const result = await geminiListModels({});
       const ids = result.models.map((m) => m.id);
-      expect(ids).toContain("gemini-3-flash-preview");
-      expect(ids).toContain("gemini-2.5-flash");
-      expect(ids).toContain("gemini-2.5-pro");
-      expect(ids).toContain("gemini-3-pro-preview");
       expect(ids).toContain("gemini-3.1-pro-preview");
-      expect(ids).toContain("gemini-3.1-flash-lite");
+      expect(ids).toContain("gemini-3-flash-preview");
+      expect(ids).toContain("gemini-3.1-flash-lite-preview");
+      expect(ids).toContain("gemini-2.5-pro");
+      expect(ids).toContain("gemini-2.5-flash");
+      expect(ids).toContain("gemini-2.5-flash-lite");
+      expect(ids).toContain("gemini-3-pro-preview");
+      expect(ids).toContain("gemini-2.0-flash");
+      expect(ids).toContain("gemini-2.0-flash-lite");
     });
   });
 
   describe("filter", () => {
     it("filters by substring match on model ID", async () => {
       const result = await geminiListModels({ filter: "flash" });
-      expect(result.total).toBe(3);
+      expect(result.total).toBe(6);
       expect(result.models.every((m) => m.id.includes("flash"))).toBe(true);
     });
 
@@ -111,12 +114,12 @@ describe("gemini-list-models", () => {
   describe("input validation", () => {
     it("accepts undefined input", async () => {
       const result = await geminiListModels(undefined);
-      expect(result.total).toBe(6);
+      expect(result.total).toBe(9);
     });
 
     it("accepts empty object", async () => {
       const result = await geminiListModels({});
-      expect(result.total).toBe(6);
+      expect(result.total).toBe(9);
     });
 
     it("rejects non-string filter", async () => {
