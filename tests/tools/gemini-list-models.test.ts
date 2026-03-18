@@ -25,8 +25,8 @@ describe("gemini-list-models", () => {
     it("returns all default models with correct structure", async () => {
       const result = await geminiListModels({});
       expect(result.source).toBe("curated");
-      expect(result.total).toBe(4);
-      expect(result.models).toHaveLength(4);
+      expect(result.total).toBe(6);
+      expect(result.models).toHaveLength(6);
 
       for (const model of result.models) {
         expect(model).toHaveProperty("id");
@@ -44,19 +44,21 @@ describe("gemini-list-models", () => {
       expect(ids).toContain("gemini-2.5-flash");
       expect(ids).toContain("gemini-2.5-pro");
       expect(ids).toContain("gemini-3-pro-preview");
+      expect(ids).toContain("gemini-3.1-pro-preview");
+      expect(ids).toContain("gemini-3.1-flash-lite");
     });
   });
 
   describe("filter", () => {
     it("filters by substring match on model ID", async () => {
       const result = await geminiListModels({ filter: "flash" });
-      expect(result.total).toBe(2);
+      expect(result.total).toBe(3);
       expect(result.models.every((m) => m.id.includes("flash"))).toBe(true);
     });
 
     it("filters case-insensitively", async () => {
       const result = await geminiListModels({ filter: "PRO" });
-      expect(result.total).toBe(2);
+      expect(result.total).toBe(3);
       expect(result.models.every((m) => m.id.includes("pro"))).toBe(true);
     });
 
@@ -109,12 +111,12 @@ describe("gemini-list-models", () => {
   describe("input validation", () => {
     it("accepts undefined input", async () => {
       const result = await geminiListModels(undefined);
-      expect(result.total).toBe(4);
+      expect(result.total).toBe(6);
     });
 
     it("accepts empty object", async () => {
       const result = await geminiListModels({});
-      expect(result.total).toBe(4);
+      expect(result.total).toBe(6);
     });
 
     it("rejects non-string filter", async () => {

@@ -50,6 +50,18 @@ const DEFAULT_MODELS: ModelInfo[] = [
     tier: "balanced",
     notes: null,
   },
+  {
+    id: "gemini-3.1-pro-preview",
+    description: "Deep reasoning with ARC-AGI-2 and GPQA strength",
+    tier: "deep",
+    notes: "may not be available on all plans",
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    description: "Cost-efficient lightweight model",
+    tier: "fast",
+    notes: "may not be available on all plans",
+  },
 ];
 
 function parseCustomModels(raw: string): ModelInfo[] {
