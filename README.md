@@ -387,6 +387,30 @@ All variables are optional.
 | `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. When set, auto-discovery is skipped entirely. Useful when gemini is installed via nvm/fnm and not on the PATH that MCP servers see. |
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained (ms). |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |
+| `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded defaults). |
+
+## CLI compatibility
+
+The server automatically detects the installed Gemini CLI version and available flags at startup. This allows it to adapt to upstream changes — for example, using `--approval-mode yolo` when available instead of the deprecated `--yolo` flag.
+
+Detection runs once on first use and is cached for the server's lifetime. If detection fails (e.g., binary not found), the server falls back to the legacy `--yolo` flag.
+
+The `gemini-health` tool reports detection results in its `cli` field:
+
+```
+cli.version            string | null   Detected CLI version (e.g. "0.34.0").
+cli.minSupported       string          Minimum supported version ("0.30.0").
+cli.versionOk          boolean         Whether the detected version meets the minimum.
+cli.detectedFlags      number          Number of flags found in --help output.
+cli.activeAdaptations  array           Flag adaptations in effect (e.g. "--approval-mode yolo (replaces --yolo)").
+cli.detectionError     string | null   Error message if detection failed.
+```
+
+Set `GEMINI_SKIP_DETECTION=1` to bypass detection entirely and use hardcoded defaults.
+
+### Upstream tracking
+
+A GitHub Actions workflow (`.github/workflows/upstream-watch.yml`) runs weekly to check for new `@google/gemini-cli` releases. When a new version is detected, it opens a tracking issue with a review checklist.
 
 ## Troubleshooting
 

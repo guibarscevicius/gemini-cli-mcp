@@ -25,6 +25,18 @@ vi.mock("../../src/session-store.js", () => ({
   },
 }));
 
+const capsMock = vi.hoisted(() => ({
+  getCapabilities: vi.fn(),
+  buildBaseArgs: vi.fn(),
+  MIN_SUPPORTED_VERSION: { raw: "0.30.0", major: 0, minor: 30, patch: 0 },
+}));
+
+vi.mock("../../src/cli-capabilities.js", () => ({
+  getCapabilities: capsMock.getCapabilities,
+  buildBaseArgs: capsMock.buildBaseArgs,
+  MIN_SUPPORTED_VERSION: capsMock.MIN_SUPPORTED_VERSION,
+}));
+
 import { getServerStats } from "../../src/gemini-runner.js";
 import { getJobStats } from "../../src/job-store.js";
 import { sessionStore } from "../../src/session-store.js";
@@ -50,6 +62,17 @@ beforeEach(() => {
     maxConcurrent: 4,
   });
   runnerMock.getEnvOverrides.mockReturnValue({ GEMINI_MAX_CONCURRENT: 4 });
+  capsMock.getCapabilities.mockResolvedValue({
+    version: { raw: "0.34.0", major: 0, minor: 34, patch: 0 },
+    flags: new Set(["--yolo", "--output-format", "--model", "--prompt"]),
+    hasApprovalMode: false,
+    hasYolo: true,
+    hasOutputFormat: true,
+    hasSandbox: false,
+    hasResume: false,
+    detectedAt: Date.now(),
+    error: null,
+  });
   mockGetJobStats.mockReturnValue({
     active: 5,
     total: 9,
@@ -78,6 +101,14 @@ describe("geminiHealth", () => {
       },
       sessions: { total: 7 },
       server: { uptime: 12.34, version },
+      cli: {
+        version: "0.34.0",
+        minSupported: "0.30.0",
+        versionOk: true,
+        detectedFlags: 4,
+        activeAdaptations: [],
+        detectionError: null,
+      },
     });
   });
 
@@ -111,6 +142,14 @@ describe("dispatcher routing for gemini-health", () => {
       },
       sessions: { total: 7 },
       server: { uptime: 12.34, version },
+      cli: {
+        version: "0.34.0",
+        minSupported: "0.30.0",
+        versionOk: true,
+        detectedFlags: 4,
+        activeAdaptations: [],
+        detectionError: null,
+      },
     });
   });
 });

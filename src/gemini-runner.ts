@@ -8,6 +8,7 @@ import { escape as escapeGlob, glob } from "glob";
 import pLimit from "p-limit";
 import { WarmProcessPool, type WarmProcess } from "./warm-pool.js";
 import { mcpLog } from "./logging.js";
+import { getCapabilities, buildBaseArgs } from "./cli-capabilities.js";
 
 export class GeminiOutputError extends Error {
   constructor(message: string, public sanitizedMessage: string) {
@@ -184,6 +185,16 @@ if (POOL_ENABLED && !SETUP_MODE) {
     effectiveStartupMs,
     GEMINI_BINARY
   );
+}
+
+// Kick off CLI capability detection (non-blocking) — logs version on success.
+// Pool args stay hardcoded for this server lifetime; detection informs cold-spawn
+// arg selection in runGemini().
+if (!SETUP_MODE) {
+  getCapabilities(GEMINI_BINARY).then((caps) => {
+    if (caps.version) process.stderr.write(`[gemini-cli-mcp] gemini CLI v${caps.version.raw} detected\n`);
+    if (caps.error) process.stderr.write(`[gemini-cli-mcp] CLI detection: ${caps.error}\n`);
+  }, () => { /* swallow — detectCapabilities already handles errors internally */ });
 }
 
 const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES ?? "3", 10);
@@ -912,9 +923,12 @@ export async function runGemini(
     countFileRefs(expandedPrompt) === 0;
 
   // Build cold-spawn args (only needed when not using the pool).
-  const args: string[] = usePool
-    ? []
-    : ["--yolo", "--output-format", "stream-json"];
+  // Uses detected CLI capabilities to adapt flags (e.g. --approval-mode vs --yolo).
+  let caps: import("./cli-capabilities.js").CliCapabilities | null = null;
+  if (!usePool) {
+    try { caps = await getCapabilities(GEMINI_BINARY); } catch { /* use fallback */ }
+  }
+  const args: string[] = usePool ? [] : buildBaseArgs(caps);
 
   if (!usePool && opts.model) {
     args.push("--model", opts.model);

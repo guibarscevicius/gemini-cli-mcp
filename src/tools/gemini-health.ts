@@ -4,6 +4,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { GEMINI_BINARY, getServerStats, getEnvOverrides } from "../gemini-runner.js";
 import { getJobStats } from "../job-store.js";
 import { sessionStore } from "../session-store.js";
+import { getCapabilities, buildBaseArgs, MIN_SUPPORTED_VERSION } from "../cli-capabilities.js";
 
 const GeminiHealthSchema = z.object({}).optional();
 const _require = createRequire(import.meta.url);
@@ -27,6 +28,14 @@ export interface GeminiHealthOutput {
   };
   sessions: { total: number };
   server: { uptime: number; version: string };
+  cli: {
+    version: string | null;
+    minSupported: string;
+    versionOk: boolean;
+    detectedFlags: number;
+    activeAdaptations: string[];
+    detectionError: string | null;
+  };
 }
 
 export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> {
@@ -35,6 +44,25 @@ export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> 
   const binaryPath = GEMINI_BINARY;
   const serverStats = getServerStats();
   const jobStats = getJobStats();
+
+  let caps: Awaited<ReturnType<typeof getCapabilities>> | null = null;
+  try { caps = await getCapabilities(binaryPath); } catch { /* detection unavailable */ }
+
+  const adaptations: string[] = [];
+  if (caps?.hasApprovalMode) {
+    adaptations.push("--approval-mode yolo (replaces --yolo)");
+  }
+
+  const versionRaw = caps?.version?.raw ?? null;
+  const versionOk = caps?.version
+    ? !(
+        caps.version.major < MIN_SUPPORTED_VERSION.major ||
+        (caps.version.major === MIN_SUPPORTED_VERSION.major &&
+          (caps.version.minor < MIN_SUPPORTED_VERSION.minor ||
+            (caps.version.minor === MIN_SUPPORTED_VERSION.minor &&
+              caps.version.patch < MIN_SUPPORTED_VERSION.patch)))
+      )
+    : false;
 
   return {
     binary: { path: binaryPath === "gemini" ? null : binaryPath },
@@ -62,6 +90,14 @@ export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> 
     server: {
       uptime: process.uptime(),
       version: SERVER_VERSION,
+    },
+    cli: {
+      version: versionRaw,
+      minSupported: MIN_SUPPORTED_VERSION.raw,
+      versionOk,
+      detectedFlags: caps?.flags.size ?? 0,
+      activeAdaptations: adaptations,
+      detectionError: caps?.error ?? null,
     },
   };
 }
@@ -143,8 +179,20 @@ export const geminiHealthToolDefinition: Tool = {
         },
         required: ["uptime", "version"],
       },
+      cli: {
+        type: "object",
+        properties: {
+          version: { type: ["string", "null"] },
+          minSupported: { type: "string" },
+          versionOk: { type: "boolean" },
+          detectedFlags: { type: "number" },
+          activeAdaptations: { type: "array", items: { type: "string" } },
+          detectionError: { type: ["string", "null"] },
+        },
+        required: ["version", "minSupported", "versionOk", "detectedFlags", "activeAdaptations", "detectionError"],
+      },
     },
-    required: ["binary", "env", "pool", "concurrency", "jobs", "sessions", "server"],
+    required: ["binary", "env", "pool", "concurrency", "jobs", "sessions", "server", "cli"],
   },
   annotations: {
     title: "Get Gemini Health",
