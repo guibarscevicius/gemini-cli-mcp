@@ -4,7 +4,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { GEMINI_BINARY, getServerStats, getEnvOverrides } from "../gemini-runner.js";
 import { getJobStats } from "../job-store.js";
 import { sessionStore } from "../session-store.js";
-import { getCapabilities, buildBaseArgs, isVersionBelow, MIN_SUPPORTED_VERSION } from "../cli-capabilities.js";
+import { getCapabilities, isVersionBelow, MIN_SUPPORTED_VERSION } from "../cli-capabilities.js";
 
 const GeminiHealthSchema = z.object({}).optional();
 const _require = createRequire(import.meta.url);
