@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.6.1...gemini-cli-mcp-v0.7.0) (2026-03-19)
+
+
+### Features
+
+* add gemini-list-models tool for model discovery ([#81](https://github.com/guibarscevicius/gemini-cli-mcp/issues/81)) ([ab545a0](https://github.com/guibarscevicius/gemini-cli-mcp/commit/ab545a0cf2216c370dbe90807470ed8db613aff0))
+* CLI version detection, flag adaptation & upstream tracking ([#83](https://github.com/guibarscevicius/gemini-cli-mcp/issues/83)) ([b1d2498](https://github.com/guibarscevicius/gemini-cli-mcp/commit/b1d24986a1c8428f0b93e2d041deb032fb868055))
+
 ## [0.6.1](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.6.0...gemini-cli-mcp-v0.6.1) (2026-03-15)
 
 
