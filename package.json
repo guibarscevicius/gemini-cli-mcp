@@ -1,6 +1,6 @@
 {
   "name": "@guibarscevicius/gemini-cli-mcp",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Safe MCP server wrapping the official Gemini CLI — stateful sessions, no shell injection, subscription auth",
   "type": "module",
   "bin": {
