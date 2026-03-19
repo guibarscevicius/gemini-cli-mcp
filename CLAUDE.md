@@ -6,11 +6,12 @@
 - `src/session-store.ts` — SQLite-backed multi-turn session store (node:sqlite)
 - `src/setup.ts` — `--setup` wizard (binary discovery, auth check, MCP config output)
 - `src/tools/ask-gemini.ts`, `src/tools/gemini-reply.ts` — MCP tool handlers
+- `src/cli-capabilities.ts` — CLI version detection, flag probing, buildBaseArgs (detectCapabilities, getCapabilities)
 - `src/dispatcher.ts` — routes MCP tool calls + error handling
 
 ## Build & test
 - `npm run build` — tsc (must pass before commit)
-- `npm test` — vitest (310 tests; all must pass)
+- `npm test` — vitest (576 tests; all must pass)
 - SQLite emits `ExperimentalWarning` in test output — not an error, safe to ignore
 
 ## Hands-on integration testing (REQUIRED before marking any PR ready)
@@ -56,4 +57,5 @@ Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed rel
 | `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. When set, auto-discovery is skipped. Useful for nvm/fnm users where gemini isn't on the MCP server's PATH. |
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained in memory (ms) |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection sweep interval (ms) |
+| `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded fallback args) |
 | `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list for `gemini-list-models` |

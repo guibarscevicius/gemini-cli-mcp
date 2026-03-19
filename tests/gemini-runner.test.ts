@@ -2,6 +2,27 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+
+// Mock cli-capabilities so runGemini uses the hardcoded fallback (--yolo) in tests.
+// The module-level .then() handler accesses caps.version/caps.error, so we return a
+// proper CliCapabilities-shaped object (not null).  For cold-spawn arg building inside
+// runGemini, buildBaseArgs receives the same object and returns the legacy --yolo args.
+const _fallbackCaps = vi.hoisted(() => ({
+  version: null,
+  flags: new Set<string>(["--yolo", "--output-format"]),
+  hasApprovalMode: false,
+  hasYolo: true,
+  hasOutputFormat: true,
+  hasSandbox: false,
+  hasResume: false,
+  detectedAt: Date.now(),
+  error: "mocked for tests",
+}));
+vi.mock("../src/cli-capabilities.js", () => ({
+  getCapabilities: vi.fn().mockResolvedValue(_fallbackCaps),
+  buildBaseArgs: vi.fn().mockImplementation(() => ["--yolo", "--output-format", "stream-json"]),
+}));
+
 import {
   runGemini,
   parseGeminiOutput,

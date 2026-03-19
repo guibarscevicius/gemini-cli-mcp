@@ -1,0 +1,83 @@
+name: Upstream CLI Watch
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Monday 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest upstream version
+        id: upstream
+        run: |
+          LATEST=$(npm view @google/gemini-cli version 2>/dev/null || echo "")
+          if [ -z "$LATEST" ]; then
+            echo "::error::Failed to fetch upstream version"
+            exit 1
+          fi
+          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+
+      - name: Compare with tracked version
+        id: compare
+        run: |
+          TRACKED=$(cat .github/upstream-version.txt | tr -d '[:space:]')
+          LATEST="${{ steps.upstream.outputs.version }}"
+          echo "tracked=$TRACKED" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          if [ "$TRACKED" = "$LATEST" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for existing issue
+        if: steps.compare.outputs.changed == 'true'
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST="${{ steps.compare.outputs.latest }}"
+          COUNT=$(gh issue list --label upstream-update --search "gemini-cli $LATEST" --state open --json number --jq 'length')
+          echo "exists=$([ "$COUNT" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Create tracking issue
+        if: steps.compare.outputs.changed == 'true' && steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST="${{ steps.compare.outputs.latest }}"
+          TRACKED="${{ steps.compare.outputs.tracked }}"
+          gh label create upstream-update --description "Upstream gemini-cli release" --color "1d76db" --force
+          gh issue create \
+            --title "upstream: gemini-cli $LATEST released (was $TRACKED)" \
+            --label upstream-update \
+            --body "$(cat <<BODY
+          ## @google/gemini-cli $LATEST
+
+          A new version of the upstream Gemini CLI has been released.
+
+          ### Review checklist
+
+          - [ ] Check [release notes / changelog](https://github.com/google-gemini/gemini-cli/releases)
+          - [ ] Verify CLI flags: run \`gemini --help\` and compare with \`cli-capabilities.ts\` probing
+          - [ ] Check for deprecated flags (\`--yolo\` → \`--approval-mode\`, etc.)
+          - [ ] Check for new flags worth supporting (\`--sandbox\`, \`--resume\`, etc.)
+          - [ ] Update \`MIN_SUPPORTED_VERSION\` if older versions are no longer viable
+          - [ ] Run integration tests with the new version
+          - [ ] Update \`.github/upstream-version.txt\` to \`$LATEST\`
+          - [ ] Update default model list in \`gemini-list-models\` if models changed
+
+          ### Links
+
+          - npm: https://www.npmjs.com/package/@google/gemini-cli
+          - GitHub: https://github.com/google-gemini/gemini-cli
+          BODY
+          )"

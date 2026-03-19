@@ -48,6 +48,7 @@ describe("tool annotations", () => {
       "jobs",
       "sessions",
       "server",
+      "cli",
     ]);
     expect((geminiListModelsToolDefinition.outputSchema as { required: string[] }).required).toEqual([
       "models",

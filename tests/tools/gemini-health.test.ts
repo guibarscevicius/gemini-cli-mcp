@@ -25,6 +25,27 @@ vi.mock("../../src/session-store.js", () => ({
   },
 }));
 
+const capsMock = vi.hoisted(() => ({
+  getCapabilities: vi.fn(),
+  buildBaseArgs: vi.fn(),
+  MIN_SUPPORTED_VERSION: { raw: "0.30.0", major: 0, minor: 30, patch: 0 },
+  isVersionBelow: (
+    version: { major: number; minor: number; patch: number },
+    minimum: { major: number; minor: number; patch: number }
+  ): boolean => {
+    if (version.major !== minimum.major) return version.major < minimum.major;
+    if (version.minor !== minimum.minor) return version.minor < minimum.minor;
+    return version.patch < minimum.patch;
+  },
+}));
+
+vi.mock("../../src/cli-capabilities.js", () => ({
+  getCapabilities: capsMock.getCapabilities,
+  buildBaseArgs: capsMock.buildBaseArgs,
+  isVersionBelow: capsMock.isVersionBelow,
+  MIN_SUPPORTED_VERSION: capsMock.MIN_SUPPORTED_VERSION,
+}));
+
 import { getServerStats } from "../../src/gemini-runner.js";
 import { getJobStats } from "../../src/job-store.js";
 import { sessionStore } from "../../src/session-store.js";
@@ -50,6 +71,17 @@ beforeEach(() => {
     maxConcurrent: 4,
   });
   runnerMock.getEnvOverrides.mockReturnValue({ GEMINI_MAX_CONCURRENT: 4 });
+  capsMock.getCapabilities.mockResolvedValue({
+    version: { raw: "0.34.0", major: 0, minor: 34, patch: 0 },
+    flags: new Set(["--yolo", "--output-format", "--model", "--prompt"]),
+    hasApprovalMode: false,
+    hasYolo: true,
+    hasOutputFormat: true,
+    hasSandbox: false,
+    hasResume: false,
+    detectedAt: Date.now(),
+    error: null,
+  });
   mockGetJobStats.mockReturnValue({
     active: 5,
     total: 9,
@@ -78,6 +110,14 @@ describe("geminiHealth", () => {
       },
       sessions: { total: 7 },
       server: { uptime: 12.34, version },
+      cli: {
+        version: "0.34.0",
+        minSupported: "0.30.0",
+        versionOk: true,
+        detectedFlags: 4,
+        activeAdaptations: [],
+        detectionError: null,
+      },
     });
   });
 
@@ -91,6 +131,70 @@ describe("geminiHealth", () => {
     runnerMock.getEnvOverrides.mockReturnValue({});
     const result = await geminiHealth({});
     expect(result.env).toEqual({});
+  });
+
+  it("handles getCapabilities rejection gracefully", async () => {
+    capsMock.getCapabilities.mockRejectedValue(new Error("unexpected boom"));
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const result = await geminiHealth({});
+    expect(result.cli.version).toBeNull();
+    expect(result.cli.versionOk).toBe(false);
+    expect(result.cli.detectedFlags).toBe(0);
+    expect(result.cli.detectionError).toBeNull();
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("unexpected boom")
+    );
+  });
+
+  it("reports activeAdaptations when hasApprovalMode is true", async () => {
+    capsMock.getCapabilities.mockResolvedValue({
+      version: { raw: "0.36.0", major: 0, minor: 36, patch: 0 },
+      flags: new Set(["--yolo", "--output-format", "--approval-mode"]),
+      hasApprovalMode: true,
+      hasYolo: true,
+      hasOutputFormat: true,
+      hasSandbox: false,
+      hasResume: false,
+      detectedAt: Date.now(),
+      error: null,
+    });
+    const result = await geminiHealth({});
+    expect(result.cli.activeAdaptations).toContain("--approval-mode yolo (replaces --yolo)");
+  });
+
+  it("reports versionOk false when version is null", async () => {
+    capsMock.getCapabilities.mockResolvedValue({
+      version: null,
+      flags: new Set(["--yolo", "--output-format"]),
+      hasApprovalMode: false,
+      hasYolo: true,
+      hasOutputFormat: true,
+      hasSandbox: false,
+      hasResume: false,
+      detectedAt: Date.now(),
+      error: "version detection failed",
+    });
+    const result = await geminiHealth({});
+    expect(result.cli.version).toBeNull();
+    expect(result.cli.versionOk).toBe(false);
+    expect(result.cli.detectionError).toBe("version detection failed");
+  });
+
+  it("reports versionOk false when version is below minimum", async () => {
+    capsMock.getCapabilities.mockResolvedValue({
+      version: { raw: "0.29.0", major: 0, minor: 29, patch: 0 },
+      flags: new Set(["--yolo"]),
+      hasApprovalMode: false,
+      hasYolo: true,
+      hasOutputFormat: false,
+      hasSandbox: false,
+      hasResume: false,
+      detectedAt: Date.now(),
+      error: null,
+    });
+    const result = await geminiHealth({});
+    expect(result.cli.version).toBe("0.29.0");
+    expect(result.cli.versionOk).toBe(false);
   });
 });
 
@@ -111,6 +215,14 @@ describe("dispatcher routing for gemini-health", () => {
       },
       sessions: { total: 7 },
       server: { uptime: 12.34, version },
+      cli: {
+        version: "0.34.0",
+        minSupported: "0.30.0",
+        versionOk: true,
+        detectedFlags: 4,
+        activeAdaptations: [],
+        detectionError: null,
+      },
     });
   });
 });
