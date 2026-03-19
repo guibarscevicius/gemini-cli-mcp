@@ -13,6 +13,7 @@ import {
   buildBaseArgs,
   detectCapabilities,
   getCapabilities,
+  isVersionBelow,
 } from "../src/cli-capabilities.js";
 
 // Helper: make execFileMock resolve with given stdout
@@ -151,7 +152,9 @@ Options:
       const caps = await detectCapabilities("/usr/bin/gemini");
       expect(caps.error).toContain("version detection failed");
       expect(caps.version).toBeNull();
-      expect(caps.flags.size).toBe(0);
+      expect(caps.flags.size).toBe(2); // fallback includes --yolo and --output-format
+      expect(caps.flags.has("--yolo")).toBe(true);
+      expect(caps.flags.has("--output-format")).toBe(true);
       expect(caps.hasYolo).toBe(true); // fallback assumes --yolo works
     });
 
@@ -261,6 +264,21 @@ describe("buildBaseArgs", () => {
     ]);
   });
 
+  it("omits --output-format when hasOutputFormat is false", () => {
+    const caps: CliCapabilities = {
+      version: { raw: "0.28.0", major: 0, minor: 28, patch: 0 },
+      flags: new Set(["--yolo"]),
+      hasApprovalMode: false,
+      hasYolo: true,
+      hasOutputFormat: false,
+      hasSandbox: false,
+      hasResume: false,
+      detectedAt: Date.now(),
+      error: null,
+    };
+    expect(buildBaseArgs(caps)).toEqual(["--yolo"]);
+  });
+
   it("returns hardcoded fallback when caps is null", () => {
     expect(buildBaseArgs(null)).toEqual([
       "--yolo",
@@ -280,6 +298,40 @@ describe("getCapabilities", () => {
     expect(first).toBe(second); // same reference — cached
     // execFile called twice total (once for --version, once for --help), not four times
     expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("isVersionBelow", () => {
+  it("returns true when version is below minimum", () => {
+    expect(isVersionBelow({ raw: "0.29.0", major: 0, minor: 29, patch: 0 }, MIN_SUPPORTED_VERSION)).toBe(true);
+  });
+
+  it("returns false at exact boundary", () => {
+    expect(isVersionBelow({ raw: "0.30.0", major: 0, minor: 30, patch: 0 }, MIN_SUPPORTED_VERSION)).toBe(false);
+  });
+
+  it("returns false when above minimum", () => {
+    expect(isVersionBelow({ raw: "0.30.1", major: 0, minor: 30, patch: 1 }, MIN_SUPPORTED_VERSION)).toBe(false);
+  });
+
+  it("returns false on major version jump", () => {
+    expect(isVersionBelow({ raw: "1.0.0", major: 1, minor: 0, patch: 0 }, MIN_SUPPORTED_VERSION)).toBe(false);
+  });
+
+  it("returns true when far below", () => {
+    expect(isVersionBelow({ raw: "0.0.1", major: 0, minor: 0, patch: 1 }, MIN_SUPPORTED_VERSION)).toBe(true);
+  });
+});
+
+describe("GEMINI_SKIP_DETECTION fallback flags consistency", () => {
+  it("fallback has flags matching boolean fields", async () => {
+    process.env.GEMINI_SKIP_DETECTION = "1";
+    const caps = await detectCapabilities("/usr/bin/gemini");
+    expect(caps.flags.has("--yolo")).toBe(caps.hasYolo);
+    expect(caps.flags.has("--output-format")).toBe(caps.hasOutputFormat);
+    expect(caps.flags.has("--approval-mode")).toBe(caps.hasApprovalMode);
+    expect(caps.flags.has("--sandbox")).toBe(caps.hasSandbox);
+    expect(caps.flags.has("--resume")).toBe(caps.hasResume);
   });
 });
 

@@ -47,7 +47,7 @@ function parseFlags(helpOutput: string): Set<string> {
   return flags;
 }
 
-function isVersionBelow(version: CliVersion, minimum: CliVersion): boolean {
+export function isVersionBelow(version: CliVersion, minimum: CliVersion): boolean {
   if (version.major !== minimum.major) return version.major < minimum.major;
   if (version.minor !== minimum.minor) return version.minor < minimum.minor;
   return version.patch < minimum.patch;
@@ -72,8 +72,8 @@ function runCommand(binary: string, args: string[]): Promise<string> {
         }
       }
     );
-    // Defensive: ensure the child is killed on timeout even if execFile
-    // doesn't (shouldn't happen, but costs nothing).
+    // Prevent unhandled 'error' events (e.g. ENOENT) from crashing the
+    // process — execFile's callback already handles the error.
     child.on("error", () => {});
   });
 }
@@ -81,7 +81,7 @@ function runCommand(binary: string, args: string[]): Promise<string> {
 function hardcodedFallback(error?: string): CliCapabilities {
   return {
     version: null,
-    flags: new Set<string>(),
+    flags: new Set<string>(["--yolo", "--output-format"]),
     hasApprovalMode: false,
     hasYolo: true,
     hasOutputFormat: true,
@@ -147,19 +147,23 @@ export function buildBaseArgs(caps: CliCapabilities | null): string[] {
   if (!caps) {
     return ["--yolo", "--output-format", "stream-json"];
   }
-  if (caps.hasApprovalMode) {
-    return ["--approval-mode", "yolo", "--output-format", "stream-json"];
+  const args: string[] = [];
+  args.push(...(caps.hasApprovalMode ? ["--approval-mode", "yolo"] : ["--yolo"]));
+  if (caps.hasOutputFormat) {
+    args.push("--output-format", "stream-json");
   }
-  return ["--yolo", "--output-format", "stream-json"];
+  return args;
 }
 
-// Lazy singleton — kicked off on first call, result cached for server lifetime
+// Lazy singleton — kicked off on first call, result cached for server lifetime.
+// NOTE: the binary parameter is only used on the first call; subsequent calls
+// return the cached result regardless of the binary passed (singleton semantics).
 let capabilitiesPromise: Promise<CliCapabilities> | null = null;
 
 export function getCapabilities(binary?: string): Promise<CliCapabilities> {
   if (capabilitiesPromise) return capabilitiesPromise;
-  // Import GEMINI_BINARY lazily to avoid circular dependency at module load time.
-  // We accept the binary as a parameter for testability and to avoid the import.
+  // Accept binary as a parameter for testability; defaults to "gemini"
+  // (callers in gemini-runner.ts pass GEMINI_BINARY explicitly).
   const effectiveBinary = binary ?? "gemini";
   capabilitiesPromise = detectCapabilities(effectiveBinary);
   return capabilitiesPromise;

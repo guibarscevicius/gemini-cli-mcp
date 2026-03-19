@@ -4,7 +4,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { GEMINI_BINARY, getServerStats, getEnvOverrides } from "../gemini-runner.js";
 import { getJobStats } from "../job-store.js";
 import { sessionStore } from "../session-store.js";
-import { getCapabilities, buildBaseArgs, MIN_SUPPORTED_VERSION } from "../cli-capabilities.js";
+import { getCapabilities, buildBaseArgs, isVersionBelow, MIN_SUPPORTED_VERSION } from "../cli-capabilities.js";
 
 const GeminiHealthSchema = z.object({}).optional();
 const _require = createRequire(import.meta.url);
@@ -46,7 +46,12 @@ export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> 
   const jobStats = getJobStats();
 
   let caps: Awaited<ReturnType<typeof getCapabilities>> | null = null;
-  try { caps = await getCapabilities(binaryPath); } catch { /* detection unavailable */ }
+  try {
+    caps = await getCapabilities(binaryPath);
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    process.stderr.write(`[gemini-cli-mcp] health: unexpected getCapabilities error: ${msg}\n`);
+  }
 
   const adaptations: string[] = [];
   if (caps?.hasApprovalMode) {
@@ -55,13 +60,7 @@ export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> 
 
   const versionRaw = caps?.version?.raw ?? null;
   const versionOk = caps?.version
-    ? !(
-        caps.version.major < MIN_SUPPORTED_VERSION.major ||
-        (caps.version.major === MIN_SUPPORTED_VERSION.major &&
-          (caps.version.minor < MIN_SUPPORTED_VERSION.minor ||
-            (caps.version.minor === MIN_SUPPORTED_VERSION.minor &&
-              caps.version.patch < MIN_SUPPORTED_VERSION.patch)))
-      )
+    ? !isVersionBelow(caps.version, MIN_SUPPORTED_VERSION)
     : false;
 
   return {
@@ -106,7 +105,7 @@ export const geminiHealthToolDefinition: Tool = {
   name: "gemini-health",
   title: "Get Gemini Health",
   description:
-    "Return runtime diagnostics: binary path, env overrides, pool/semaphore concurrency and pool errors, job totals with per-status counts, session count, and server uptime.",
+    "Return runtime diagnostics: binary path, env overrides, pool/semaphore concurrency and pool errors, job totals with per-status counts, session count, server uptime, CLI version/flag detection status, and active flag adaptations.",
   inputSchema: {
     type: "object" as const,
     properties: {},

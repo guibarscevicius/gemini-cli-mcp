@@ -9,7 +9,7 @@ import * as os from "node:os";
 // runGemini, buildBaseArgs receives the same object and returns the legacy --yolo args.
 const _fallbackCaps = vi.hoisted(() => ({
   version: null,
-  flags: new Set<string>(),
+  flags: new Set<string>(["--yolo", "--output-format"]),
   hasApprovalMode: false,
   hasYolo: true,
   hasOutputFormat: true,

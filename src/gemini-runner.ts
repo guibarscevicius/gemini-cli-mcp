@@ -194,7 +194,9 @@ if (!SETUP_MODE) {
   getCapabilities(GEMINI_BINARY).then((caps) => {
     if (caps.version) process.stderr.write(`[gemini-cli-mcp] gemini CLI v${caps.version.raw} detected\n`);
     if (caps.error) process.stderr.write(`[gemini-cli-mcp] CLI detection: ${caps.error}\n`);
-  }, () => { /* swallow — detectCapabilities already handles errors internally */ });
+  }, (err) => {
+    process.stderr.write(`[gemini-cli-mcp] CLI detection failed unexpectedly: ${(err as Error).message ?? err}\n`);
+  });
 }
 
 const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES ?? "3", 10);
@@ -926,7 +928,11 @@ export async function runGemini(
   // Uses detected CLI capabilities to adapt flags (e.g. --approval-mode vs --yolo).
   let caps: import("./cli-capabilities.js").CliCapabilities | null = null;
   if (!usePool) {
-    try { caps = await getCapabilities(GEMINI_BINARY); } catch { /* use fallback */ }
+    try {
+      caps = await getCapabilities(GEMINI_BINARY);
+    } catch (err) {
+      process.stderr.write(`[gemini-cli-mcp] capability detection failed, using fallback args: ${(err as Error).message ?? err}\n`);
+    }
   }
   const args: string[] = usePool ? [] : buildBaseArgs(caps);
 
