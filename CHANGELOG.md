@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.7.0...gemini-cli-mcp-v0.7.1) (2026-04-02)
+
+
+### Bug Fixes
+
+* clean up gemini processes on shutdown ([12d7a58](https://github.com/guibarscevicius/gemini-cli-mcp/commit/12d7a58963a368e33d32054d67f94d3998d32a0d))
+* clean up Gemini processes on shutdown ([f190afc](https://github.com/guibarscevicius/gemini-cli-mcp/commit/f190afc61abb09b6599a9a9c41671fb2f12691f8))
+* satisfy shutdown handler lint rules ([b05cf96](https://github.com/guibarscevicius/gemini-cli-mcp/commit/b05cf963174de15921e206c216380c4af09e2eef))
+
 ## [0.7.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.6.1...gemini-cli-mcp-v0.7.0) (2026-03-19)
 
 
