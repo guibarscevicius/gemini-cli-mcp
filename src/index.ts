@@ -41,8 +41,15 @@ const { version: pkgVersion } = _require("../package.json") as { version: string
 
 type ToolServer = Pick<Server, "setRequestHandler" | "getClientCapabilities" | "elicitInput">;
 type ShutdownServer = { onclose?: (() => void) | undefined };
-type ShutdownProcess = Pick<NodeJS.Process, "on" | "stdin">;
-type ShutdownStdin = Pick<NodeJS.ReadStream, "on"> & Partial<Pick<NodeJS.ReadStream, "off">>;
+type ShutdownSignal = "SIGTERM" | "SIGINT";
+type ShutdownStdin = {
+  on(event: "end" | "close", listener: () => void): unknown;
+  off?: (event: "end" | "close", listener: () => void) => unknown;
+};
+type ShutdownProcess = {
+  on(event: ShutdownSignal, listener: () => void): unknown;
+  stdin: ShutdownStdin;
+};
 
 const DEFAULT_SHUTDOWN_FORCE_KILL_MS = 2000;
 
