@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import {
   appendChunk,
   cancelJob,
@@ -154,32 +155,65 @@ describe("cancelJob", () => {
 });
 
 describe("shutdownPendingJobs", () => {
+  it("resolves before the force-kill deadline when subprocesses exit after SIGTERM", async () => {
+    vi.useFakeTimers();
+    createJob("graceful-job");
+
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number | null;
+    };
+    child.exitCode = null;
+    child.kill = vi.fn((signal: string) => {
+      if (signal === "SIGTERM") {
+        child.exitCode = 0;
+        child.emit("exit", 0, null);
+      }
+      return true;
+    });
+    getJob("graceful-job")!.subprocess = child as any;
+
+    const shutdownPromise = shutdownPendingJobs("Server shutting down", 2000);
+    await Promise.resolve();
+
+    await expect(shutdownPromise).resolves.toBeUndefined();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels pending jobs, unregisters request ids, and sends SIGTERM then SIGKILL after grace period", async () => {
     vi.useFakeTimers();
     createJob("shutdown-job");
     registerRequest("req-shutdown", "shutdown-job");
 
-    const kill = vi.fn((signal: string) => {
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number | null;
+    };
+    child.exitCode = null;
+    child.kill = vi.fn((signal: string) => {
       if (signal === "SIGKILL") {
-        (child as { exitCode: number | null }).exitCode = 137;
+        child.exitCode = 137;
       }
       return true;
     });
-    const child = { kill, exitCode: null } as any;
-    getJob("shutdown-job")!.subprocess = child;
+    getJob("shutdown-job")!.subprocess = child as any;
 
     const completion = getJob("shutdown-job")!.completion;
     const shutdownPromise = shutdownPendingJobs("Server shutting down", 2000);
 
     await vi.advanceTimersByTimeAsync(1999);
-    expect(kill).toHaveBeenCalledTimes(1);
-    expect(kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
 
     await vi.advanceTimersByTimeAsync(1);
     await shutdownPromise;
 
-    expect(kill).toHaveBeenCalledTimes(2);
-    expect(kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+    expect(child.kill).toHaveBeenCalledTimes(2);
+    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
     expect(getJob("shutdown-job")!.status).toBe("cancelled");
     expect(getJobByRequestId("req-shutdown")).toBeUndefined();
     await expect(completion).rejects.toThrow("Server shutting down");

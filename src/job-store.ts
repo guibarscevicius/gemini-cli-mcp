@@ -153,6 +153,36 @@ export async function shutdownPendingJobs(
   if (subprocesses.length === 0 || forceKillAfterMs <= 0) return;
 
   await new Promise<void>((resolve) => {
+    let settled = false;
+    const exitListeners = new Map<ChildProcess, { exit: () => void; error: () => void }>();
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      for (const [subprocess, listeners] of exitListeners) {
+        subprocess.off?.("exit", listeners.exit);
+        subprocess.off?.("error", listeners.error);
+      }
+      resolve();
+    };
+    const maybeFinish = () => {
+      if (subprocesses.every((subprocess) => subprocess.exitCode !== null)) {
+        finish();
+      }
+    };
+
+    for (const subprocess of subprocesses) {
+      if (subprocess.exitCode !== null) continue;
+
+      const listeners = {
+        exit: () => maybeFinish(),
+        error: () => maybeFinish(),
+      };
+      exitListeners.set(subprocess, listeners);
+      subprocess.once("exit", listeners.exit);
+      subprocess.once("error", listeners.error);
+    }
+
     const timer = setTimeout(() => {
       for (const subprocess of subprocesses) {
         if (subprocess.exitCode === null) {
@@ -163,10 +193,11 @@ export async function shutdownPendingJobs(
           }
         }
       }
-      resolve();
+      finish();
     }, forceKillAfterMs);
 
     if (timer.unref) timer.unref();
+    maybeFinish();
   });
 }
 

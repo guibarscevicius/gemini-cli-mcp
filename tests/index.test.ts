@@ -9,7 +9,7 @@ vi.mock("../src/dispatcher.js", () => ({
 }));
 
 import { handleCallTool } from "../src/dispatcher.js";
-import { createServer, registerToolHandlers, registerShutdownHandlers } from "../src/index.js";
+import { createServer, registerToolHandlers, registerShutdownHandlers, startServer } from "../src/index.js";
 import { _resetMcpLogger } from "../src/logging.js";
 import { STATIC_RESOURCES, RESOURCE_TEMPLATES } from "../src/resources.js";
 import { askGeminiToolDefinition } from "../src/tools/ask-gemini.js";
@@ -240,5 +240,59 @@ describe("registerShutdownHandlers", () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledWith("stdin end");
     restore();
+  });
+});
+
+describe("startServer", () => {
+  it("registers shutdown handlers before connect resolves", async () => {
+    const signalHandlers = new Map<string, () => void>();
+    const stdinListeners = new Map<string, () => void>();
+    const processLike = {
+      on: vi.fn((event: string, listener: () => void) => {
+        signalHandlers.set(event, listener);
+      }),
+      exit: vi.fn(),
+      stderr: { write: vi.fn(() => true) },
+      stdin: {
+        on: vi.fn((event: string, listener: () => void) => {
+          stdinListeners.set(event, listener);
+        }),
+        off: vi.fn(),
+      },
+    } as any;
+    const transport = { close: vi.fn().mockResolvedValue(undefined) } as any;
+    const connectStarted = Promise.withResolvers<void>();
+    const connectDone = Promise.withResolvers<void>();
+    const server = {
+      connect: vi.fn(async () => {
+        connectStarted.resolve();
+        await connectDone.promise;
+      }),
+    } as any;
+    const shutdownPendingJobs = vi.fn().mockResolvedValue(undefined);
+    const warmPool = null;
+
+    const startPromise = startServer({
+      server,
+      transport,
+      process: processLike,
+      shutdownPendingJobs,
+      warmPool,
+    });
+
+    await connectStarted.promise;
+
+    expect(signalHandlers.has("SIGINT")).toBe(true);
+    expect(signalHandlers.has("SIGTERM")).toBe(true);
+    expect(stdinListeners.has("end")).toBe(true);
+    expect(stdinListeners.has("close")).toBe(true);
+
+    signalHandlers.get("SIGTERM")?.();
+    await Promise.resolve();
+
+    expect(shutdownPendingJobs).toHaveBeenCalledWith("Server shutting down", 2000);
+
+    connectDone.resolve();
+    await startPromise;
   });
 });
