@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import {
   appendChunk,
   cancelJob,
@@ -8,8 +9,10 @@ import {
   failJob,
   getJob,
   getJobStats,
+  shutdownPendingJobs,
   sweepExpiredJobs,
 } from "../src/job-store.js";
+import { clearMap, getJobByRequestId, registerRequest } from "../src/request-map.js";
 
 beforeEach(() => {
   clearJobs();
@@ -17,6 +20,8 @@ beforeEach(() => {
 
 afterEach(() => {
   clearJobs();
+  clearMap();
+  vi.useRealTimers();
 });
 
 describe("createJob / getJob", () => {
@@ -149,6 +154,84 @@ describe("cancelJob", () => {
   });
 });
 
+describe("shutdownPendingJobs", () => {
+  it("resolves before the force-kill deadline when subprocesses exit after SIGTERM", async () => {
+    vi.useFakeTimers();
+    createJob("graceful-job");
+
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number | null;
+    };
+    child.exitCode = null;
+    child.kill = vi.fn((signal: string) => {
+      if (signal === "SIGTERM") {
+        child.exitCode = 0;
+        child.emit("exit", 0, null);
+      }
+      return true;
+    });
+    getJob("graceful-job")!.subprocess = child as any;
+
+    const shutdownPromise = shutdownPendingJobs("Server shutting down", 2000);
+    await Promise.resolve();
+
+    await expect(shutdownPromise).resolves.toBeUndefined();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels pending jobs, unregisters request ids, and sends SIGTERM then SIGKILL after grace period", async () => {
+    vi.useFakeTimers();
+    createJob("shutdown-job");
+    registerRequest("req-shutdown", "shutdown-job");
+
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number | null;
+    };
+    child.exitCode = null;
+    child.kill = vi.fn((signal: string) => {
+      if (signal === "SIGKILL") {
+        child.exitCode = 137;
+      }
+      return true;
+    });
+    getJob("shutdown-job")!.subprocess = child as any;
+
+    const completion = getJob("shutdown-job")!.completion;
+    const shutdownPromise = shutdownPendingJobs("Server shutting down", 2000);
+
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+
+    await vi.advanceTimersByTimeAsync(1);
+    await shutdownPromise;
+
+    expect(child.kill).toHaveBeenCalledTimes(2);
+    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+    expect(getJob("shutdown-job")!.status).toBe("cancelled");
+    expect(getJobByRequestId("req-shutdown")).toBeUndefined();
+    await expect(completion).rejects.toThrow("Server shutting down");
+  });
+
+  it("leaves completed and errored jobs untouched", async () => {
+    createJob("done-job");
+    createJob("error-job");
+    completeJob("done-job", "ok");
+    failJob("error-job", "boom");
+
+    await shutdownPendingJobs("Server shutting down", 10);
+
+    expect(getJob("done-job")!.status).toBe("done");
+    expect(getJob("error-job")!.status).toBe("error");
+  });
+});
+
 describe("GC expiry (sweepExpiredJobs)", () => {
   it("deletes completed jobs older than TTL", () => {
     createJob("gc-done");
@@ -189,8 +272,6 @@ describe("GC expiry (sweepExpiredJobs)", () => {
   });
 
   it("GC sweep calls unregisterByJobId for expired jobs", async () => {
-    const { registerRequest, getJobByRequestId, clearMap } = await import("../src/request-map.js");
-    clearMap();
     createJob("gc-unregister");
     registerRequest("req-gc", "gc-unregister");
     getJob("gc-unregister")!.createdAt = 0;
@@ -198,7 +279,6 @@ describe("GC expiry (sweepExpiredJobs)", () => {
     sweepExpiredJobs();
 
     expect(getJobByRequestId("req-gc")).toBeUndefined();
-    clearMap();
   });
 
   it("does NOT delete recent completed jobs within TTL", () => {

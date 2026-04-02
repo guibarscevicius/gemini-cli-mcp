@@ -185,7 +185,11 @@ describe("askGemini", () => {
       "What is the weather?",
       expect.objectContaining({ model: undefined, cwd: undefined, tool: "ask-gemini" }),
       expect.any(Function), // custom executor
-      expect.any(Function)  // onChunk
+      expect.any(Function), // onChunk
+      expect.objectContaining({
+        onProcessStart: expect.any(Function),
+        onProcessEnd: expect.any(Function),
+      })
     );
   });
 
@@ -196,7 +200,8 @@ describe("askGemini", () => {
       "hello",
       expect.objectContaining({ model: "gemini-2.5-pro" }),
       expect.any(Function),
-      expect.any(Function)
+      expect.any(Function),
+      expect.any(Object)
     );
   });
 
@@ -207,7 +212,8 @@ describe("askGemini", () => {
       "review @src/auth.ts",
       expect.objectContaining({ cwd: "/my/project" }),
       expect.any(Function),
-      expect.any(Function)
+      expect.any(Function),
+      expect.any(Object)
     );
   });
 
@@ -218,7 +224,8 @@ describe("askGemini", () => {
       "Check @click.prevent in @a.ts",
       expect.objectContaining({ expandRefs: false }),
       expect.any(Function),
-      expect.any(Function)
+      expect.any(Function),
+      expect.any(Object)
     );
   });
 

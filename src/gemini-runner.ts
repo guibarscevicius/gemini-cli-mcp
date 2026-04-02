@@ -878,7 +878,11 @@ export async function runGemini(
   prompt: string,
   opts: GeminiOptions = {},
   executor: GeminiExecutor = defaultExecutor,
-  onChunk?: (text: string) => void
+  onChunk?: (text: string) => void,
+  lifecycle?: {
+    onProcessStart?: (cp: ChildProcess) => void;
+    onProcessEnd?: () => void;
+  }
 ): Promise<string> {
   const homeDir = process.env.HOME;
   if (!homeDir) {
@@ -986,7 +990,12 @@ export async function runGemini(
       try {
         ({ result: response, retryCount } = await withRetry(async () => {
           const wp = await warmPool!.acquire(QUEUE_TIMEOUT_MS);
-          return runWithWarmProcess(wp, expandedPrompt, TIMEOUT_MS, onChunk);
+          lifecycle?.onProcessStart?.(wp.cp);
+          try {
+            return await runWithWarmProcess(wp, expandedPrompt, TIMEOUT_MS, onChunk);
+          } finally {
+            lifecycle?.onProcessEnd?.();
+          }
         }, MAX_RETRIES > 0 ? MAX_RETRIES + 1 : 1));
       } catch (err) {
         const homeDirForTelemetry = process.env.HOME ?? "";

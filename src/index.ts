@@ -40,6 +40,26 @@ const _require = createRequire(import.meta.url);
 const { version: pkgVersion } = _require("../package.json") as { version: string };
 
 type ToolServer = Pick<Server, "setRequestHandler" | "getClientCapabilities" | "elicitInput">;
+type ShutdownServer = { onclose?: (() => void) | undefined };
+type ShutdownSignal = "SIGTERM" | "SIGINT";
+type ShutdownExit = (code?: number) => never;
+type ShutdownStdin = {
+  on(event: "end" | "close", listener: () => void): unknown;
+  off?: (event: "end" | "close", listener: () => void) => unknown;
+};
+type ShutdownProcess = {
+  on(event: ShutdownSignal, listener: () => void): unknown;
+  exit: ShutdownExit;
+  stderr: { write(chunk: string): boolean };
+  stdin: ShutdownStdin;
+};
+type ConnectedServer = ShutdownServer & { connect(transport: StdioServerTransport): Promise<void> };
+type PendingJobShutdown = (
+  reason?: string,
+  forceKillAfterMs?: number
+) => Promise<void>;
+
+const DEFAULT_SHUTDOWN_FORCE_KILL_MS = 2000;
 
 export function registerToolHandlers(server: ToolServer): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -158,32 +178,96 @@ export function createServer(): Server {
 
 const server = createServer();
 
-async function shutdown(signal: string): Promise<void> {
-  process.stderr.write(`[gemini-cli-mcp] received ${signal}, draining process pool…\n`);
-  if (warmPool !== null) {
-    await warmPool.drain();
-  }
-  process.exit(0);
+export function registerShutdownHandlers({
+  process: processRef = process,
+  server: serverRef,
+  shutdown,
+}: {
+  process?: ShutdownProcess;
+  server: ShutdownServer;
+  shutdown: (reason: string) => void;
+}): () => void {
+  let triggered = false;
+  const stdin = processRef.stdin as ShutdownStdin;
+
+  const runShutdown = (reason: string) => {
+    if (triggered) return;
+    triggered = true;
+    shutdown(reason);
+  };
+
+  const onSigterm = () => runShutdown("SIGTERM");
+  const onSigint = () => runShutdown("SIGINT");
+  const onStdinEnd = () => runShutdown("stdin end");
+  const onStdinClose = () => runShutdown("stdin close");
+
+  processRef.on("SIGTERM", onSigterm);
+  processRef.on("SIGINT", onSigint);
+  stdin.on("end", onStdinEnd);
+  stdin.on("close", onStdinClose);
+
+  const previousOnClose = serverRef.onclose;
+  serverRef.onclose = () => {
+    previousOnClose?.();
+    runShutdown("server close");
+  };
+
+  return () => {
+    stdin.off?.("end", onStdinEnd);
+    stdin.off?.("close", onStdinClose);
+    serverRef.onclose = previousOnClose;
+  };
 }
 
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  // stderr is safe to use — MCP protocol uses stdout/stdin only
-  process.stderr.write("gemini-cli-mcp server started\n");
+  await startServer();
+}
 
-  process.on("SIGTERM", () => {
-    shutdown("SIGTERM").catch((err) => {
-      process.stderr.write(`[gemini-cli-mcp] shutdown error: ${err instanceof Error ? err.message : String(err)}\n`);
-      process.exit(1);
-    });
+export async function startServer({
+  server: serverRef = server,
+  transport = new StdioServerTransport(),
+  process: processRef = process,
+  shutdownPendingJobs = jobStore.shutdownPendingJobs,
+  warmPool: warmPoolRef = warmPool,
+}: {
+  server?: ConnectedServer;
+  transport?: StdioServerTransport;
+  process?: ShutdownProcess;
+  shutdownPendingJobs?: PendingJobShutdown;
+  warmPool?: typeof warmPool;
+} = {}): Promise<void> {
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = async (reason: string): Promise<void> => {
+    if (shutdownPromise !== undefined) return shutdownPromise;
+
+    shutdownPromise = (async () => {
+      processRef.stderr.write(`[gemini-cli-mcp] received ${reason}, shutting down Gemini processes…\n`);
+      await shutdownPendingJobs("Server shutting down", DEFAULT_SHUTDOWN_FORCE_KILL_MS);
+      if (warmPoolRef !== null) {
+        await warmPoolRef.drain();
+      }
+      await transport.close();
+    })();
+
+    return shutdownPromise;
+  };
+
+  registerShutdownHandlers({
+    process: processRef,
+    server: serverRef,
+    shutdown: (reason) => {
+      shutdown(reason).then(() => {
+        processRef.exit(0);
+      }).catch((err) => {
+        processRef.stderr.write(`[gemini-cli-mcp] shutdown error: ${err instanceof Error ? err.message : String(err)}\n`);
+        processRef.exit(1);
+      });
+    },
   });
-  process.on("SIGINT", () => {
-    shutdown("SIGINT").catch((err) => {
-      process.stderr.write(`[gemini-cli-mcp] shutdown error: ${err instanceof Error ? err.message : String(err)}\n`);
-      process.exit(1);
-    });
-  });
+
+  await serverRef.connect(transport);
+  // stderr is safe to use — MCP protocol uses stdout/stdin only
+  processRef.stderr.write("gemini-cli-mcp server started\n");
 }
 
 const isEntrypoint =

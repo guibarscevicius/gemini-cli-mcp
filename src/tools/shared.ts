@@ -60,7 +60,17 @@ export async function runGeminiAsync(
     });
 
   try {
-    const response = await runGemini(prompt, opts, executor, onChunk);
+    const response = await runGemini(prompt, opts, executor, onChunk, {
+      onProcessStart: (cp) => {
+        job.subprocess = cp;
+        if (job.status === "cancelled") {
+          cp.kill("SIGTERM");
+        }
+      },
+      onProcessEnd: () => {
+        job.subprocess = undefined;
+      },
+    });
     return response;
   } finally {
     job.subprocess = undefined;

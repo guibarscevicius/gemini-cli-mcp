@@ -237,7 +237,11 @@ describe("geminiReply", () => {
       "new question",
       expect.objectContaining({ tool: "gemini-reply", sessionId: VALID_SESSION_ID }),
       expect.any(Function),
-      expect.any(Function)
+      expect.any(Function),
+      expect.objectContaining({
+        onProcessStart: expect.any(Function),
+        onProcessEnd: expect.any(Function),
+      })
     );
   });
 
@@ -265,7 +269,8 @@ describe("geminiReply", () => {
       expect.any(String),
       expect.objectContaining({ model: "gemini-2.5-flash" }),
       expect.any(Function),
-      expect.any(Function)
+      expect.any(Function),
+      expect.any(Object)
     );
   });
 
@@ -276,7 +281,8 @@ describe("geminiReply", () => {
       expect.any(String),
       expect.objectContaining({ cwd: "/my/project" }),
       expect.any(Function),
-      expect.any(Function)
+      expect.any(Function),
+      expect.any(Object)
     );
   });
 
@@ -287,7 +293,8 @@ describe("geminiReply", () => {
       expect.any(String),
       expect.objectContaining({ expandRefs: false }),
       expect.any(Function),
-      expect.any(Function)
+      expect.any(Function),
+      expect.any(Object)
     );
   });
 

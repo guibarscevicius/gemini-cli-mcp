@@ -115,13 +115,90 @@ export function failJob(jobId: string, error: string): void {
 }
 
 export function cancelJob(jobId: string): void {
+  cancelJobWithReason(jobId, "Job was cancelled");
+}
+
+export function cancelJobWithReason(jobId: string, reason: string): void {
   const job = jobs.get(jobId);
   if (job && job.status === "pending") {
     job.status = "cancelled";
     job.subprocess = undefined;
-    job._reject(new Error("Job was cancelled"));
+    job._reject(new Error(reason));
     _jobListChangedCb?.();
   }
+}
+
+export async function shutdownPendingJobs(
+  reason: string = "Server shutting down",
+  forceKillAfterMs: number = 2000
+): Promise<void> {
+  const subprocesses: ChildProcess[] = [];
+
+  for (const [jobId, job] of jobs) {
+    if (job.status !== "pending") continue;
+
+    if (job.subprocess !== undefined) {
+      subprocesses.push(job.subprocess);
+      try {
+        job.subprocess.kill("SIGTERM");
+      } catch {
+        // Ignore kill races; the follow-up cancellation still clears job state.
+      }
+    }
+
+    cancelJobWithReason(jobId, reason);
+    unregisterByJobId(jobId);
+  }
+
+  if (subprocesses.length === 0 || forceKillAfterMs <= 0) return;
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const exitListeners = new Map<ChildProcess, { exit: () => void; error: () => void }>();
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      for (const [subprocess, listeners] of exitListeners) {
+        subprocess.off?.("exit", listeners.exit);
+        subprocess.off?.("error", listeners.error);
+      }
+      resolve();
+    };
+    const maybeFinish = () => {
+      if (subprocesses.every((subprocess) => subprocess.exitCode !== null)) {
+        finish();
+      }
+    };
+
+    for (const subprocess of subprocesses) {
+      if (subprocess.exitCode !== null) continue;
+
+      const listeners = {
+        exit: () => maybeFinish(),
+        error: () => maybeFinish(),
+      };
+      exitListeners.set(subprocess, listeners);
+      subprocess.once("exit", listeners.exit);
+      subprocess.once("error", listeners.error);
+    }
+
+    const timer = setTimeout(() => {
+      for (const subprocess of subprocesses) {
+        if (subprocess.exitCode === null) {
+          try {
+            subprocess.kill("SIGKILL");
+          } catch {
+            // Process already exited between the liveness check and kill attempt.
+          }
+        }
+      }
+      finish();
+    }, forceKillAfterMs);
+
+    if (timer.unref) timer.unref();
+    maybeFinish();
+  });
 }
 
 /** @internal For test isolation only — not part of the public API. */
