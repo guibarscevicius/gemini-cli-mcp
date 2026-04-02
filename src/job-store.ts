@@ -115,13 +115,59 @@ export function failJob(jobId: string, error: string): void {
 }
 
 export function cancelJob(jobId: string): void {
+  cancelJobWithReason(jobId, "Job was cancelled");
+}
+
+export function cancelJobWithReason(jobId: string, reason: string): void {
   const job = jobs.get(jobId);
   if (job && job.status === "pending") {
     job.status = "cancelled";
     job.subprocess = undefined;
-    job._reject(new Error("Job was cancelled"));
+    job._reject(new Error(reason));
     _jobListChangedCb?.();
   }
+}
+
+export async function shutdownPendingJobs(
+  reason: string = "Server shutting down",
+  forceKillAfterMs: number = 2000
+): Promise<void> {
+  const subprocesses: ChildProcess[] = [];
+
+  for (const [jobId, job] of jobs) {
+    if (job.status !== "pending") continue;
+
+    if (job.subprocess !== undefined) {
+      subprocesses.push(job.subprocess);
+      try {
+        job.subprocess.kill("SIGTERM");
+      } catch {
+        // Ignore kill races; the follow-up cancellation still clears job state.
+      }
+    }
+
+    cancelJobWithReason(jobId, reason);
+    unregisterByJobId(jobId);
+  }
+
+  if (subprocesses.length === 0 || forceKillAfterMs <= 0) return;
+
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      for (const subprocess of subprocesses) {
+        if (subprocess.exitCode === null) {
+          try {
+            subprocess.kill("SIGKILL");
+          } catch {
+            // Process already exited between the liveness check and kill attempt.
+          }
+        }
+      }
+      resolve();
+    }, forceKillAfterMs);
+
+    if (timer.unref) timer.unref();
+  });
 }
 
 /** @internal For test isolation only — not part of the public API. */

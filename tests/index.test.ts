@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -9,7 +9,7 @@ vi.mock("../src/dispatcher.js", () => ({
 }));
 
 import { handleCallTool } from "../src/dispatcher.js";
-import { createServer, registerToolHandlers } from "../src/index.js";
+import { createServer, registerToolHandlers, registerShutdownHandlers } from "../src/index.js";
 import { _resetMcpLogger } from "../src/logging.js";
 import { STATIC_RESOURCES, RESOURCE_TEMPLATES } from "../src/resources.js";
 import { askGeminiToolDefinition } from "../src/tools/ask-gemini.js";
@@ -187,5 +187,58 @@ describe("index wiring", () => {
     const handler = server._requestHandlers.get("resources/templates/list")!;
     const result = await handler({ method: "resources/templates/list", params: {} });
     expect(result).toEqual({ resourceTemplates: RESOURCE_TEMPLATES });
+  });
+});
+
+describe("registerShutdownHandlers", () => {
+  const originalStdin = process.stdin;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("runs shutdown once when stdin ends and server closes", async () => {
+    const shutdown = vi.fn().mockResolvedValue(undefined);
+    const on = vi.fn();
+    const stdin = { on } as unknown as NodeJS.ReadStream;
+    const signalHandlers = new Map<string, () => void>();
+    const processLike = {
+      on: vi.fn((event: string, handler: () => void) => {
+        signalHandlers.set(event, handler);
+        return process;
+      }),
+      stdin,
+    } as unknown as NodeJS.Process;
+    const server = {} as { onclose?: () => void };
+
+    const restore = registerShutdownHandlers({
+      process: processLike,
+      server,
+      shutdown,
+    });
+
+    const endHandler = on.mock.calls.find(([event]) => event === "end")?.[1] as (() => void) | undefined;
+    const closeHandler = on.mock.calls.find(([event]) => event === "close")?.[1] as (() => void) | undefined;
+
+    expect(endHandler).toBeTypeOf("function");
+    expect(closeHandler).toBeTypeOf("function");
+    expect(server.onclose).toBeTypeOf("function");
+    expect(signalHandlers.has("SIGINT")).toBe(true);
+    expect(signalHandlers.has("SIGTERM")).toBe(true);
+
+    endHandler?.();
+    server.onclose?.();
+    closeHandler?.();
+    signalHandlers.get("SIGINT")?.();
+
+    await vi.runAllTimersAsync();
+
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledWith("stdin end");
+    restore();
   });
 });

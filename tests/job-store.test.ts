@@ -8,8 +8,10 @@ import {
   failJob,
   getJob,
   getJobStats,
+  shutdownPendingJobs,
   sweepExpiredJobs,
 } from "../src/job-store.js";
+import { clearMap, getJobByRequestId, registerRequest } from "../src/request-map.js";
 
 beforeEach(() => {
   clearJobs();
@@ -17,6 +19,8 @@ beforeEach(() => {
 
 afterEach(() => {
   clearJobs();
+  clearMap();
+  vi.useRealTimers();
 });
 
 describe("createJob / getJob", () => {
@@ -149,6 +153,51 @@ describe("cancelJob", () => {
   });
 });
 
+describe("shutdownPendingJobs", () => {
+  it("cancels pending jobs, unregisters request ids, and sends SIGTERM then SIGKILL after grace period", async () => {
+    vi.useFakeTimers();
+    createJob("shutdown-job");
+    registerRequest("req-shutdown", "shutdown-job");
+
+    const kill = vi.fn((signal: string) => {
+      if (signal === "SIGKILL") {
+        (child as { exitCode: number | null }).exitCode = 137;
+      }
+      return true;
+    });
+    const child = { kill, exitCode: null } as any;
+    getJob("shutdown-job")!.subprocess = child;
+
+    const completion = getJob("shutdown-job")!.completion;
+    const shutdownPromise = shutdownPendingJobs("Server shutting down", 2000);
+
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+
+    await vi.advanceTimersByTimeAsync(1);
+    await shutdownPromise;
+
+    expect(kill).toHaveBeenCalledTimes(2);
+    expect(kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+    expect(getJob("shutdown-job")!.status).toBe("cancelled");
+    expect(getJobByRequestId("req-shutdown")).toBeUndefined();
+    await expect(completion).rejects.toThrow("Server shutting down");
+  });
+
+  it("leaves completed and errored jobs untouched", async () => {
+    createJob("done-job");
+    createJob("error-job");
+    completeJob("done-job", "ok");
+    failJob("error-job", "boom");
+
+    await shutdownPendingJobs("Server shutting down", 10);
+
+    expect(getJob("done-job")!.status).toBe("done");
+    expect(getJob("error-job")!.status).toBe("error");
+  });
+});
+
 describe("GC expiry (sweepExpiredJobs)", () => {
   it("deletes completed jobs older than TTL", () => {
     createJob("gc-done");
@@ -189,8 +238,6 @@ describe("GC expiry (sweepExpiredJobs)", () => {
   });
 
   it("GC sweep calls unregisterByJobId for expired jobs", async () => {
-    const { registerRequest, getJobByRequestId, clearMap } = await import("../src/request-map.js");
-    clearMap();
     createJob("gc-unregister");
     registerRequest("req-gc", "gc-unregister");
     getJob("gc-unregister")!.createdAt = 0;
@@ -198,7 +245,6 @@ describe("GC expiry (sweepExpiredJobs)", () => {
     sweepExpiredJobs();
 
     expect(getJobByRequestId("req-gc")).toBeUndefined();
-    clearMap();
   });
 
   it("does NOT delete recent completed jobs within TTL", () => {
