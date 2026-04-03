@@ -11,7 +11,8 @@
 
 ## Build & test
 - `npm run build` — tsc (must pass before commit)
-- `npm test` — vitest (576 tests; all must pass)
+- `npx tsc --noEmit` — standalone type check (run before committing; catches type errors without emitting files)
+- `npm test` — vitest (592 tests; all must pass)
 - SQLite emits `ExperimentalWarning` in test output — not an error, safe to ignore
 
 ## Hands-on integration testing (REQUIRED before marking any PR ready)
