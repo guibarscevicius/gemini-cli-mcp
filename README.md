@@ -72,7 +72,7 @@ Add to `~/.claude/settings.json` for Claude Code CLI, or your host's MCP config 
 }
 ```
 
-> **Model compatibility (Gemini CLI ≥ 0.31):** The CLI forces `include_thoughts` for models that support thinking. Recommended models: `gemini-3-flash-preview` (fast, default), `gemini-3.1-pro-preview` (deep reasoning), `gemini-3.1-flash-lite` (cost-efficient).
+> **Model compatibility (Gemini CLI ≥ 0.31):** The CLI forces `include_thoughts` for models that support thinking. Recommended models: `gemini-3-flash-preview` (fast, default), `gemini-3-pro-preview` (deep reasoning), and `gemini-2.5-flash-lite` (lowest-cost throughput). `gemini-3.1-pro-preview` may appear for eligible users as a rolling preview upgrade.
 
 ## Tools
 
@@ -417,6 +417,17 @@ Set `GEMINI_SKIP_DETECTION=1` to bypass detection entirely and use hardcoded def
 ### Upstream tracking
 
 A GitHub Actions workflow (`.github/workflows/upstream-watch.yml`) runs weekly to check for new `@google/gemini-cli` releases. When a new version is detected, it opens a tracking issue with a review checklist.
+
+When refreshing to a new upstream CLI version, use this acceptance flow:
+
+```bash
+npm run build
+npm run test -- tests/cli-capabilities.test.ts tests/tools/gemini-list-models.test.ts tests/resources.test.ts tests/prompts.test.ts tests/logging.test.ts tests/index-server.test.ts
+npm run test:smoke
+npm test
+```
+
+`npm run test:smoke` performs a real stdio MCP session against `dist/index.js` and requires a working authenticated `gemini` CLI on your machine.
 
 ## Troubleshooting
 
