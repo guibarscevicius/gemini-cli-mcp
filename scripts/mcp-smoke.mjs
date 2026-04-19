@@ -62,7 +62,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function createStdioClient(child) {
+function createStdioClient(child, { isShuttingDown = () => false } = {}) {
   let nextId = 1;
   let buffer = "";
   const pending = new Map();
@@ -81,6 +81,26 @@ function createStdioClient(child) {
     }
     notificationWaiters.length = 0;
   };
+
+  // Surface a subprocess I/O error to every awaiter — unless we're tearing down on
+  // purpose, in which case EPIPE / "write after end" are expected, not regressions.
+  const failPendingUnlessShuttingDown = (err) => {
+    if (err && !isShuttingDown()) failPending(err);
+  };
+
+  // Writes to child.stdin can throw synchronously (destroyed stream) or emit async
+  // 'error' events (EPIPE on dead server). Both paths route through failPending so
+  // a dead-server write fails loudly with a pending request's awaiter, not silently.
+  const writeLine = (payload) => {
+    const line = `${JSON.stringify(payload)}\n`;
+    try {
+      child.stdin.write(line, failPendingUnlessShuttingDown);
+    } catch (err) {
+      failPendingUnlessShuttingDown(err);
+    }
+  };
+
+  child.stdin.on("error", failPendingUnlessShuttingDown);
 
   const handleNotification = (message) => {
     notifications.push(message);
@@ -136,13 +156,14 @@ function createStdioClient(child) {
   });
 
   child.on("close", (code) => {
+    if (isShuttingDown()) return;
     failPending(new Error(`server exited unexpectedly with code ${code ?? "unknown"}`));
   });
 
   return {
     notifications,
     notify(method, params) {
-      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+      writeLine({ jsonrpc: "2.0", method, params });
     },
     request(method, params, timeoutMs = 30_000, id = nextId++) {
       return new Promise((resolve, reject) => {
@@ -151,7 +172,7 @@ function createStdioClient(child) {
           reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${method}`));
         }, timeoutMs);
         pending.set(id, { resolve, reject, timer, method });
-        child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+        writeLine({ jsonrpc: "2.0", id, method, params });
       });
     },
     async waitForNotification(predicate, timeoutMs = 10_000) {
@@ -169,21 +190,30 @@ function createStdioClient(child) {
   };
 }
 
-function parseToolResult(result) {
+function parseToolResult(result, label = "<unknown>") {
   if (result?.structuredContent) {
     return result.structuredContent;
   }
   const text = result?.content?.find((item) => item.type === "text")?.text;
-  assert(typeof text === "string", "Tool result missing text content");
-  return JSON.parse(text);
+  assert(typeof text === "string", `Tool result missing text content (tool: ${label})`);
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to parse JSON from tool ${label}: ${message}\nRaw text: ${text}`);
+  }
 }
 
 async function waitForJobTerminal(client, jobId, timeoutMs = 60_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const status = parseToolResult(
-      await client.request("tools/call", { name: "gemini-poll", arguments: { jobId } }, 30_000)
+      await client.request("tools/call", { name: "gemini-poll", arguments: { jobId } }, 30_000),
+      "gemini-poll"
     );
+    if (status.status === "error") {
+      throw new Error(`Job ${jobId} failed: ${status.error ?? "(no error message)"}`);
+    }
     if (status.status !== "pending") {
       return status;
     }
@@ -205,7 +235,8 @@ async function main() {
     process.stderr.write(chunk.toString("utf8"));
   });
 
-  const client = createStdioClient(child);
+  let shuttingDown = false;
+  const client = createStdioClient(child, { isShuttingDown: () => shuttingDown });
 
   try {
     logStep("INIT", "initializing MCP session");
@@ -270,9 +301,17 @@ async function main() {
     logStep("PASS", "logging/setLevel + notifications/message");
 
     const health = parseToolResult(
-      await client.request("tools/call", { name: "gemini-health", arguments: {} }, 30_000)
+      await client.request("tools/call", { name: "gemini-health", arguments: {} }, 30_000),
+      "gemini-health"
     );
-    assert(health.cli?.version === "0.38.1", `Expected CLI version 0.38.1, got ${health.cli?.version}`);
+    // Gate on detection success + minimum-version check rather than a pinned exact version,
+    // so this smoke harness stays the standard acceptance flow across future upstream bumps.
+    assert(typeof health.cli?.version === "string", `Expected CLI version detected, got ${health.cli?.version}`);
+    assert(
+      health.cli?.versionOk === true,
+      `CLI version ${health.cli?.version} does not meet minimum ${health.cli?.minSupported}`
+    );
+    assert(health.cli?.detectionError == null, `CLI detection failed: ${health.cli?.detectionError}`);
     assert(typeof health.server?.version === "string", "Health response missing server version");
     logStep("PASS", "gemini-health");
 
@@ -292,6 +331,7 @@ async function main() {
     );
     assert(typeof askAsync.jobId === "string", "ask-gemini missing jobId");
     assert(typeof askAsync.sessionId === "string", "ask-gemini missing sessionId");
+    assert(typeof askAsync.pollIntervalMs === "number", "ask-gemini missing pollIntervalMs");
     logStep("PASS", "ask-gemini async");
 
     const sessionId = askAsync.sessionId;
@@ -462,28 +502,36 @@ async function main() {
       )
     );
     client.notify("notifications/cancelled", { requestId: cancelRequestId, reason: "smoke-test cancel" });
-    await sleep(1_000);
+    // notifications/cancelled is a protocol-level signal that MAY route to gemini-cancel
+    // server-side but is not guaranteed to force-kill an already-running detached subprocess
+    // on its own (see docs/plans/2026-04-15-upstream-0381-refresh.md). We verify two things:
+    //   1. the server stays healthy and the job is in a known non-error state (not crashed,
+    //      not transitioned to "error"), and
+    //   2. explicit gemini-cancel still drives the job to terminal within a tight deadline.
+    await sleep(2_000);
     const requestCancelPoll = parseToolResult(
       await client.request(
         "tools/call",
         { name: "gemini-poll", arguments: { jobId: requestCancelStart.jobId } },
         30_000
-      )
+      ),
+      "gemini-poll"
     );
     assert(
       requestCancelPoll.status === "pending" ||
-        requestCancelPoll.status === "done" ||
-        requestCancelPoll.status === "cancelled",
-      `Unexpected status after notifications/cancelled: ${requestCancelPoll.status}`
+        requestCancelPoll.status === "cancelled" ||
+        requestCancelPoll.status === "done",
+      `notifications/cancelled left job in unexpected state: ${requestCancelPoll.status}`
     );
     parseToolResult(
       await client.request(
         "tools/call",
         { name: "gemini-cancel", arguments: { jobId: requestCancelStart.jobId } },
         15_000
-      )
+      ),
+      "gemini-cancel"
     );
-    const requestCancelStatus = await waitForJobTerminal(client, requestCancelStart.jobId, 60_000);
+    const requestCancelStatus = await waitForJobTerminal(client, requestCancelStart.jobId, 30_000);
     assert(
       requestCancelStatus.status === "cancelled" || requestCancelStatus.status === "done",
       `Expected request-cancelled job to become manageable, got ${requestCancelStatus.status}`
@@ -492,9 +540,20 @@ async function main() {
 
     logStep("SMOKE", "all MCP feature checks passed");
   } finally {
+    shuttingDown = true;
     if (child.exitCode === null) {
+      const closed = new Promise((resolve) => child.once("close", resolve));
       child.kill("SIGTERM");
-      await sleep(500);
+      const timedOut = await Promise.race([
+        closed.then(() => false),
+        sleep(2_000).then(() => true),
+      ]);
+      if (timedOut && child.exitCode === null) {
+        // SIGTERM ignored — escalate rather than leaking a zombie that may keep writing to stderr
+        // while the script exits.
+        child.kill("SIGKILL");
+        await Promise.race([closed, sleep(500)]);
+      }
     }
   }
 }

@@ -43,8 +43,11 @@ jobs:
         id: existing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.compare.outputs.latest }}
         run: |
-          COUNT=$(gh issue list --label upstream-update --state open --json title --jq '[.[] | select(.title | startswith("upstream: gemini-cli "))] | length')
+          COUNT=$(gh issue list --label upstream-update --state open --json title \
+            --jq --arg latest "$LATEST" \
+            '[.[] | select(.title == "upstream: gemini-cli \($latest) released" or (.title | startswith("upstream: gemini-cli \($latest) ")))] | length')
           echo "exists=$([ "$COUNT" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Create tracking issue

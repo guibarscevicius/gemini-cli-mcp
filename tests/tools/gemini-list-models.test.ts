@@ -48,6 +48,26 @@ describe("gemini-list-models", () => {
       expect(ids).toContain("gemini-2.5-flash");
       expect(ids).toContain("gemini-2.5-flash-lite");
     });
+
+    it("classifies gemini-2.5-flash as tier 'balanced'", async () => {
+      // Deliberate editorial reclassification from "fast" to "balanced" in the 0.38.1
+      // refresh — pin the value so an accidental revert is caught.
+      const result = await geminiListModels({});
+      const model = result.models.find((m) => m.id === "gemini-2.5-flash");
+      expect(model?.tier).toBe("balanced");
+    });
+
+    it("marks gemini-3-flash-preview with notes 'default'", async () => {
+      const result = await geminiListModels({});
+      const model = result.models.find((m) => m.id === "gemini-3-flash-preview");
+      expect(model?.notes).toBe("default");
+    });
+
+    it("marks gemini-3.1-pro-preview with notes 'limited rollout'", async () => {
+      const result = await geminiListModels({});
+      const model = result.models.find((m) => m.id === "gemini-3.1-pro-preview");
+      expect(model?.notes).toBe("limited rollout");
+    });
   });
 
   describe("filter", () => {

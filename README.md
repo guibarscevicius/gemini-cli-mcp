@@ -394,6 +394,7 @@ All variables are optional.
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained (ms). |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |
 | `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded defaults). |
+| `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list returned by `gemini-list-models`. Custom entries are reported with `tier: "balanced"` and `description: "Custom model"`. |
 
 ## CLI compatibility
 
