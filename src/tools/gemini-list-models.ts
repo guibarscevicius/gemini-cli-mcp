@@ -27,8 +27,8 @@ export interface GeminiListModelsOutput {
 
 const DEFAULT_MODELS: ModelInfo[] = [
   {
-    id: "gemini-3.1-pro-preview",
-    description: "Most capable reasoning model with agentic capabilities",
+    id: "gemini-3-pro-preview",
+    description: "Most capable Gemini 3 preview model for deep reasoning and agentic work",
     tier: "deep",
     notes: null,
   },
@@ -36,49 +36,31 @@ const DEFAULT_MODELS: ModelInfo[] = [
     id: "gemini-3-flash-preview",
     description: "Fast frontier-class performance at low cost (default)",
     tier: "fast",
-    notes: null,
+    notes: "default",
   },
   {
-    id: "gemini-3.1-flash-lite-preview",
-    description: "Cost-efficient lightweight model for high-throughput tasks",
-    tier: "fast",
-    notes: null,
+    id: "gemini-3.1-pro-preview",
+    description: "Rolling out preview upgrade over Gemini 3 Pro for eligible users",
+    tier: "deep",
+    notes: "limited rollout",
   },
   {
     id: "gemini-2.5-pro",
-    description: "Advanced reasoning model for complex tasks",
+    description: "Stable pro model for complex reasoning when Gemini 3 preview is unavailable",
     tier: "deep",
     notes: null,
   },
   {
     id: "gemini-2.5-flash",
-    description: "Fast model with strong coding and reasoning",
-    tier: "fast",
+    description: "Balanced fast model with strong coding and reasoning",
+    tier: "balanced",
     notes: null,
   },
   {
     id: "gemini-2.5-flash-lite",
-    description: "Budget-friendly model with fastest response times",
+    description: "Lowest-cost high-throughput model for simple or parallel tasks",
     tier: "fast",
     notes: null,
-  },
-  {
-    id: "gemini-3-pro-preview",
-    description: "Redirects to gemini-3.1-pro-preview since March 9, 2026",
-    tier: "deep",
-    notes: "deprecated",
-  },
-  {
-    id: "gemini-2.0-flash",
-    description: "Previous generation flash model",
-    tier: "fast",
-    notes: "retiring June 1, 2026",
-  },
-  {
-    id: "gemini-2.0-flash-lite",
-    description: "Previous generation lite model",
-    tier: "fast",
-    notes: "retiring June 1, 2026",
   },
 ];
 

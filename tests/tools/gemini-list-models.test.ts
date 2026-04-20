@@ -26,8 +26,8 @@ describe("gemini-list-models", () => {
     it("returns all default models with correct structure", async () => {
       const result = await geminiListModels({});
       expect(result.source).toBe("curated");
-      expect(result.total).toBe(9);
-      expect(result.models).toHaveLength(9);
+      expect(result.total).toBe(6);
+      expect(result.models).toHaveLength(6);
 
       for (const model of result.models) {
         expect(model).toHaveProperty("id");
@@ -41,22 +41,39 @@ describe("gemini-list-models", () => {
     it("includes the expected model IDs", async () => {
       const result = await geminiListModels({});
       const ids = result.models.map((m) => m.id);
-      expect(ids).toContain("gemini-3.1-pro-preview");
+      expect(ids).toContain("gemini-3-pro-preview");
       expect(ids).toContain("gemini-3-flash-preview");
-      expect(ids).toContain("gemini-3.1-flash-lite-preview");
+      expect(ids).toContain("gemini-3.1-pro-preview");
       expect(ids).toContain("gemini-2.5-pro");
       expect(ids).toContain("gemini-2.5-flash");
       expect(ids).toContain("gemini-2.5-flash-lite");
-      expect(ids).toContain("gemini-3-pro-preview");
-      expect(ids).toContain("gemini-2.0-flash");
-      expect(ids).toContain("gemini-2.0-flash-lite");
+    });
+
+    it("classifies gemini-2.5-flash as tier 'balanced'", async () => {
+      // Deliberate editorial reclassification from "fast" to "balanced" in the 0.38.1
+      // refresh — pin the value so an accidental revert is caught.
+      const result = await geminiListModels({});
+      const model = result.models.find((m) => m.id === "gemini-2.5-flash");
+      expect(model?.tier).toBe("balanced");
+    });
+
+    it("marks gemini-3-flash-preview with notes 'default'", async () => {
+      const result = await geminiListModels({});
+      const model = result.models.find((m) => m.id === "gemini-3-flash-preview");
+      expect(model?.notes).toBe("default");
+    });
+
+    it("marks gemini-3.1-pro-preview with notes 'limited rollout'", async () => {
+      const result = await geminiListModels({});
+      const model = result.models.find((m) => m.id === "gemini-3.1-pro-preview");
+      expect(model?.notes).toBe("limited rollout");
     });
   });
 
   describe("filter", () => {
     it("filters by substring match on model ID", async () => {
       const result = await geminiListModels({ filter: "flash" });
-      expect(result.total).toBe(6);
+      expect(result.total).toBe(3);
       expect(result.models.every((m) => m.id.includes("flash"))).toBe(true);
     });
 
@@ -115,12 +132,12 @@ describe("gemini-list-models", () => {
   describe("input validation", () => {
     it("accepts undefined input", async () => {
       const result = await geminiListModels(undefined);
-      expect(result.total).toBe(9);
+      expect(result.total).toBe(6);
     });
 
     it("accepts empty object", async () => {
       const result = await geminiListModels({});
-      expect(result.total).toBe(9);
+      expect(result.total).toBe(6);
     });
 
     it("rejects non-string filter", () => {
@@ -173,7 +190,7 @@ describe("dispatcher routing for gemini-list-models", () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.source).toBe("curated");
     expect(parsed.models).toBeInstanceOf(Array);
-    expect(parsed.total).toBe(9);
+    expect(parsed.total).toBe(6);
     expect(result.structuredContent).toEqual(parsed);
   });
 
