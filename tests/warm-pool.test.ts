@@ -84,12 +84,31 @@ const flushMicrotasks = () => Promise.resolve();
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("WarmProcessPool", () => {
+  let processKillSpy: ReturnType<typeof vi.spyOn> | undefined;
+
   beforeEach(() => {
     spawnCalls = [];
+    // Production code now signals the entire POSIX process group via
+    // process.kill(-pid, sig). Simulate group-kill propagation by finding the
+    // matching mock cp and triggering its exit (mirrors what the kernel does
+    // for a real child whose group leader is killed). Issue #96.
+    processKillSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((pid: number, _sig?: string | number) => {
+        if (pid < 0) {
+          const cp = spawnCalls.find((c) => c.pid === -pid);
+          if (cp && cp.exitCode === null) cp.mockExit(0);
+          return true;
+        }
+        // Should never be called with a positive pid in these tests; throw to
+        // surface accidental real-process signaling instead of silently passing.
+        throw new Error(`unexpected positive-pid process.kill in test: ${pid}`);
+      });
   });
 
   afterEach(async () => {
     vi.useRealTimers();
+    processKillSpy?.mockRestore();
   });
 
   // ── Construction ───────────────────────────────────────────────────────────
@@ -223,21 +242,23 @@ describe("WarmProcessPool", () => {
     await expect(pool.drain()).resolves.toBeUndefined();
   });
 
-  it("drain() kills all ready processes and resolves when they exit", async () => {
+  it("drain() kills the entire process group of every ready process", async () => {
     const pool = new WarmProcessPool(2, [], {});
     expect(pool.readyCount).toBe(2);
 
-    // drain() calls cp.kill("SIGTERM") — mock emits "exit" synchronously
+    // drain() now calls process.kill(-pid, "SIGTERM") to signal the whole
+    // POSIX process group; the spy in beforeEach mirrors that by triggering
+    // mockExit on the matching cp.  Issue #96.
     await pool.drain();
 
     expect(pool.readyCount).toBe(0);
-    // Both processes must have been sent SIGTERM
-    expect((spawnCalls[0].kill as ReturnType<typeof vi.fn>).mock.calls.some(
-      (args: unknown[]) => args[0] === "SIGTERM"
-    )).toBe(true);
-    expect((spawnCalls[1].kill as ReturnType<typeof vi.fn>).mock.calls.some(
-      (args: unknown[]) => args[0] === "SIGTERM"
-    )).toBe(true);
+    const groupKills = processKillSpy!.mock.calls.filter(([pid]) => (pid as number) < 0);
+    expect(groupKills).toEqual(
+      expect.arrayContaining([
+        [-spawnCalls[0].pid!, "SIGTERM"],
+        [-spawnCalls[1].pid!, "SIGTERM"],
+      ]),
+    );
   });
 
   it("drain() rejects pending waiters", async () => {

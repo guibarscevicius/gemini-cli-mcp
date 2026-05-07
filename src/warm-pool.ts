@@ -20,8 +20,9 @@
  *   warm process → first-byte ~0.9 s, total ~4.4 s  (≈ 12 s savings)
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
 import { mcpLog } from "./logging.js";
+import { spawnInGroup, killGroup } from "./process-group.js";
 
 /** Interval between keepalive writes to each idle process (ms). */
 const KEEPALIVE_INTERVAL_MS = 5_000;
@@ -76,7 +77,7 @@ export class WarmProcessPool {
   private _spawnAndEnqueue(): void {
     if (this.draining) return;
 
-    const cp = spawn(this.binary, this.baseArgs, {
+    const cp = spawnInGroup(this.binary, this.baseArgs, {
       env: this.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -223,7 +224,10 @@ export class WarmProcessPool {
       return new Promise<void>((resolve) => {
         wp.cp.on("exit", () => resolve());
         wp.cp.on("error", () => resolve());
-        try { wp.cp.kill("SIGTERM"); } catch { resolve(); }
+        // killGroup never throws: it returns false when the child is already
+        // exited or the group-signal failed (e.g. ESRCH). In either case the
+        // promise must resolve so drain() does not hang.
+        if (!killGroup(wp.cp, "SIGTERM")) resolve();
       });
     });
 
