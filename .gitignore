@@ -21,3 +21,6 @@ scratch/
 
 # Internal development notes (test plans, session logs, personal paths)
 tasks/
+
+# Local autonomous-save / remember tool state (per-machine logs and PID file)
+.remember/

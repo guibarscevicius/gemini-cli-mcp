@@ -21,6 +21,7 @@ const _fallbackCaps = vi.hoisted(() => ({
 vi.mock("../src/cli-capabilities.js", () => ({
   getCapabilities: vi.fn().mockResolvedValue(_fallbackCaps),
   buildBaseArgs: vi.fn().mockImplementation(() => ["--yolo", "--output-format", "stream-json"]),
+  GEMINI_CHILD_ENV_OVERRIDES: { GEMINI_CLI_NO_RELAUNCH: "true" },
 }));
 
 import {

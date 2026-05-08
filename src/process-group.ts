@@ -1,24 +1,20 @@
 /**
  * Process-group spawn / signal helpers (issue #96).
  *
- * The npm-published `gemini` binary is a Node shim that re-spawns Node with
- * `--max-old-space-size=15890` to run the real CLI. So each warm-pool slot is
- * **two** OS processes: shim (immediate child) → real CLI (grandchild).
+ * Originally @google/gemini-cli ran as two Node processes per slot — the npm
+ * entry point would self-relaunch with `--max-old-space-size=<50% RAM>` for a
+ * larger heap, leaving the second process as a grandchild that survived
+ * `cp.kill(sig)` because the signal only reached the immediate child.
  *
- * `cp.kill(sig)` only signals the immediate child. The grandchild is
- * reparented to PID 1 and survives, leaking ~poolSize processes per server
- * lifecycle.
+ * Issue #98 eliminates the self-relaunch by setting `GEMINI_CLI_NO_RELAUNCH=true`
+ * in the spawn env (see `GEMINI_CHILD_ENV_OVERRIDES` in cli-capabilities.ts), so
+ * the warm-pool is now one Node process per slot.
  *
- * Fix on POSIX: spawn each child as a process-group leader (`detached: true`)
- * and signal the entire group via `process.kill(-pid, sig)`. The kernel then
- * delivers the signal to every member of the group, including grandchildren.
- *
- * Windows is intentionally left on single-PID kill behavior:
- *   • `detached: true` opens a visible console window per child on Windows
- *     because Node's `windowsHide` flag has no effect when `detached` is also
- *     set (nodejs/node#21825).
- *   • The PID-1 reparenting that creates the leak is POSIX-specific; Windows
- *     uses Job Objects with different lifecycle semantics.
+ * We still spawn as a process-group leader and signal the full group on
+ * shutdown: the CLI itself may fork tool subprocesses (shell tools, MCP
+ * subservers) that would otherwise be reparented to PID 1 if we only signaled
+ * the CLI's PID. POSIX-only — Windows uses Job Objects with different
+ * lifecycle semantics.
  */
 
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
@@ -27,8 +23,8 @@ const POSIX = process.platform !== "win32";
 
 /**
  * Spawn a child as a process-group leader on POSIX so that the entire group
- * (immediate child + grandchildren spawned by an npm shim) can be signaled
- * together via {@link killGroup}.
+ * (CLI process + tool subprocesses or MCP subservers it may fork) can be
+ * signaled together via {@link killGroup}.
  *
  * The `detached` option is omitted from the parameter type because this helper
  * sets it unconditionally — letting a caller pass `detached: false` would

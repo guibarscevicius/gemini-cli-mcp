@@ -410,4 +410,45 @@ describe("runSetup", () => {
     expect(output).toContain("dist/index.js");
     writeSpy.mockRestore();
   });
+
+  // Issue #98: the auth-check spawn must set GEMINI_CLI_NO_RELAUNCH=true so the
+  // CLI doesn't re-exec itself for heap sizing during setup.
+  it("passes GEMINI_CLI_NO_RELAUNCH=true to the auth-check spawn", async () => {
+    vi.doMock("../src/gemini-runner.js", () => ({
+      discoverGeminiBinary: vi.fn().mockReturnValue("/usr/local/bin/gemini"),
+    }));
+    vi.doMock("node:fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs")>();
+      return { ...actual, existsSync: vi.fn().mockReturnValue(true) };
+    });
+
+    let authCheckOpts: { env?: Record<string, string> } | undefined;
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:child_process")>();
+      const mockSpawn = vi.fn().mockImplementation(
+        (_cmd: string, args: string[], opts: { env?: Record<string, string> }) => {
+          if (args.includes("--prompt")) authCheckOpts = opts;
+          const cp = mockChildProcess();
+          const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+          (cp.on as ReturnType<typeof vi.fn>).mockImplementation(
+            (evt: string, cb: (...a: unknown[]) => void) => {
+              handlers[evt] = handlers[evt] ?? [];
+              handlers[evt].push(cb);
+            }
+          );
+          setTimeout(() => handlers["close"]?.forEach((cb) => cb(0, null)), 10);
+          return cp;
+        }
+      );
+      return { ...actual, spawn: mockSpawn };
+    });
+
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const { runSetup } = await import("../src/setup.js");
+    await runSetup();
+    writeSpy.mockRestore();
+
+    expect(authCheckOpts).toBeDefined();
+    expect(authCheckOpts?.env?.GEMINI_CLI_NO_RELAUNCH).toBe("true");
+  });
 });

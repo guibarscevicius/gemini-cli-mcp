@@ -63,18 +63,27 @@ function makeMockCp(pid = 100): ChildProcess & {
 
 let spawnCalls: Array<ReturnType<typeof makeMockCp>> = [];
 
+const spawnMock = vi.hoisted(() =>
+  vi.fn((_cmd: string, _args: readonly string[], _opts: unknown) => {
+    // The test module reassigns spawnCalls in beforeEach; the closure captures
+    // the binding via the module-level `let`, not the value at hoist time.
+  }),
+);
+
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
   return {
     ...original,
-    // Start mock PIDs at 100 — real children never get pid <= 1 and the new
-    // catastrophic-kill guard in killGroup refuses pid 0/1.
-    spawn: vi.fn(() => {
-      const cp = makeMockCp(100 + spawnCalls.length);
-      spawnCalls.push(cp);
-      return cp;
-    }),
+    spawn: spawnMock,
   };
+});
+
+// Start mock PIDs at 100 — real children never get pid <= 1 and the
+// catastrophic-kill guard in killGroup refuses pid 0/1.
+spawnMock.mockImplementation(() => {
+  const cp = makeMockCp(100 + spawnCalls.length);
+  spawnCalls.push(cp);
+  return cp;
 });
 
 // ── Import pool AFTER mock is installed ──────────────────────────────────────
@@ -121,6 +130,25 @@ describe("WarmProcessPool", () => {
   it("spawns poolSize processes on construction", () => {
     new WarmProcessPool(3, ["--yolo"], { HOME: "/home/test", PATH: "/bin" });
     expect(spawnCalls).toHaveLength(3);
+  });
+
+  // Issue #98: the env passed to the pool constructor must reach the spawn call
+  // so GEMINI_CLI_NO_RELAUNCH (set in gemini-runner.ts) actually disables the
+  // CLI's runtime self-relaunch.
+  it("forwards constructor env to spawn options", () => {
+    spawnMock.mockClear();
+    new WarmProcessPool(
+      1,
+      ["--yolo"],
+      { HOME: "/home/test", PATH: "/bin", GEMINI_CLI_NO_RELAUNCH: "true" },
+    );
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const opts = spawnMock.mock.calls[0][2] as { env?: Record<string, string> };
+    expect(opts.env).toMatchObject({
+      HOME: "/home/test",
+      PATH: "/bin",
+      GEMINI_CLI_NO_RELAUNCH: "true",
+    });
   });
 
   it("size property returns poolSize", () => {
