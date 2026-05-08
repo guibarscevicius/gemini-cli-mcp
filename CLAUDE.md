@@ -60,3 +60,22 @@ Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed rel
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection sweep interval (ms) |
 | `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded fallback args) |
 | `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list for `gemini-list-models` |
+
+## Env vars set on every gemini child (issue #98)
+
+`GEMINI_CHILD_ENV_OVERRIDES` in `src/cli-capabilities.ts` defines env vars
+injected into every spawned `gemini` process. Currently:
+
+- `GEMINI_CLI_NO_RELAUNCH=true` — disables `@google/gemini-cli`'s runtime
+  self-relaunch (`relaunchAppInChildProcess` in `packages/cli/src/utils/relaunch.ts`).
+  Without this, the CLI re-execs itself with `--max-old-space-size=<50% RAM>`,
+  producing two Node processes per warm-pool slot. With it set, we get one
+  process per slot — verifiable via `pgrep -af "gemini --yolo"` (count should
+  equal `GEMINI_POOL_SIZE`, not 2× it). Trade-off: CLI runs at Node's default
+  heap (~4 GB on 64-bit). If a real prompt OOMs we revisit by passing
+  `--max-old-space-size` explicitly.
+
+Contract verified at upstream v0.38.1 (installed) and v0.38.2 (latest). If a
+future release changes the env-var name or removes the gate, the
+`cli-capabilities` and `setup` propagation tests still pass but the integration
+process-tree check fails — that's the canary.

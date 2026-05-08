@@ -8,7 +8,7 @@ import { escape as escapeGlob, glob } from "glob";
 import pLimit from "p-limit";
 import { WarmProcessPool, type WarmProcess } from "./warm-pool.js";
 import { mcpLog } from "./logging.js";
-import { getCapabilities, buildBaseArgs } from "./cli-capabilities.js";
+import { getCapabilities, buildBaseArgs, GEMINI_CHILD_ENV_OVERRIDES } from "./cli-capabilities.js";
 import { spawnInGroup, killGroup } from "./process-group.js";
 
 export class GeminiOutputError extends Error {
@@ -182,6 +182,7 @@ if (POOL_ENABLED && !SETUP_MODE) {
     {
       HOME: process.env.HOME ?? "",
       PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+      ...GEMINI_CHILD_ENV_OVERRIDES,
     },
     effectiveStartupMs,
     GEMINI_BINARY
@@ -512,7 +513,7 @@ export function spawnGemini(
   onError: (err: Error) => void
 ): ChildProcess {
   const cp = spawnInGroup(GEMINI_BINARY, args, {
-    env: spawnOpts.env,
+    env: { ...spawnOpts.env, ...GEMINI_CHILD_ENV_OVERRIDES },
     cwd: spawnOpts.cwd,
     stdio: ["pipe", "pipe", "pipe"],
   });

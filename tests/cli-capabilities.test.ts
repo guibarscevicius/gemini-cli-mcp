@@ -225,6 +225,24 @@ Options:
       expect(execFileMock).toHaveBeenCalled();
     });
   });
+
+  // Issue #98: every gemini child must run with GEMINI_CLI_NO_RELAUNCH=true so the
+  // CLI's runtime self-relaunch (50%-of-RAM heap retry) is short-circuited and we
+  // get one Node process per slot instead of two.
+  describe("GEMINI_CLI_NO_RELAUNCH propagation", () => {
+    it("passes GEMINI_CLI_NO_RELAUNCH=true to execFile for every detection probe", async () => {
+      mockExecFile({
+        "--version": { stdout: "0.38.1\n" },
+        "--help": { stdout: "--yolo" },
+      });
+      await detectCapabilities("/usr/bin/gemini");
+      expect(execFileMock).toHaveBeenCalledTimes(2);
+      for (const call of execFileMock.mock.calls) {
+        const opts = call[2] as { env?: Record<string, string> };
+        expect(opts.env?.GEMINI_CLI_NO_RELAUNCH).toBe("true");
+      }
+    });
+  });
 });
 
 describe("buildBaseArgs", () => {

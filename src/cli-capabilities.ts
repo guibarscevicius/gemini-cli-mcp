@@ -28,6 +28,25 @@ export const MIN_SUPPORTED_VERSION: CliVersion = {
 
 const DETECTION_TIMEOUT_MS = 5_000;
 
+/**
+ * Env vars injected into every gemini child process.
+ *
+ * `GEMINI_CLI_NO_RELAUNCH=true` short-circuits @google/gemini-cli's runtime
+ * self-relaunch (relaunchAppInChildProcess in packages/cli/src/utils/relaunch.ts),
+ * which would otherwise spawn a second `node --max-old-space-size=<50% RAM>`
+ * to inherit a larger heap. With one Node process per warm-pool slot we get a
+ * flatter process tree, faster pool startup, and no shim-signal-propagation
+ * contract to maintain. Trade-off: CLI runs at Node's default heap (~4 GB on
+ * 64-bit) — sufficient for our concurrency limits.
+ *
+ * Verified contract at @google/gemini-cli v0.38.1 (installed) and v0.38.2
+ * (latest): the env var is checked at the entry of relaunchAppInChildProcess
+ * and used internally by the CLI to prevent relaunch recursion.
+ */
+export const GEMINI_CHILD_ENV_OVERRIDES = {
+  GEMINI_CLI_NO_RELAUNCH: "true",
+} as const;
+
 function parseVersion(output: string): CliVersion | null {
   const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
   if (!match) return null;
@@ -58,7 +77,11 @@ function runCommand(binary: string, args: string[]): Promise<string> {
     const child = execFile(
       binary,
       args,
-      { timeout: DETECTION_TIMEOUT_MS, encoding: "utf8" },
+      {
+        timeout: DETECTION_TIMEOUT_MS,
+        encoding: "utf8",
+        env: { ...process.env, ...GEMINI_CHILD_ENV_OVERRIDES },
+      },
       (error, stdout, stderr) => {
         // --version and --help may exit 0 or 1 depending on the CLI version.
         // Accept any exit as long as we got output.

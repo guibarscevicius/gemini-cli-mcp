@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as nodePath from "node:path";
 import { discoverGeminiBinary } from "./gemini-runner.js";
+import { GEMINI_CHILD_ENV_OVERRIDES } from "./cli-capabilities.js";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -237,7 +238,11 @@ async function installGeminiCli(): Promise<void> {
 async function checkAuth(binary: string): Promise<"ok" | "not-authenticated" | "timeout"> {
   return new Promise((resolve) => {
     const cp = spawn(binary, ["--prompt", "ping", "--output-format", "stream-json"], {
-      env: { HOME: process.env.HOME ?? "", PATH: process.env.PATH ?? "" },
+      env: {
+        HOME: process.env.HOME ?? "",
+        PATH: process.env.PATH ?? "",
+        ...GEMINI_CHILD_ENV_OVERRIDES,
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stderr = "";
