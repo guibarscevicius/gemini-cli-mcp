@@ -81,15 +81,24 @@ describe("discoverGeminiBinary", () => {
 });
 
 describe("GEMINI_BINARY constant in spawn calls", () => {
+  // These tests assert the exact binary `spawn` receives. Issue #97's setpriv
+  // wrap reshapes that on Linux (spawn is called with "setpriv" and the binary
+  // is in args). Disabling the wrap here keeps these tests focused on binary
+  // discovery — separate suite (process-group.test.ts) covers the wrap itself.
+  const originalDisablePdeathsig = process.env.GEMINI_DISABLE_PDEATHSIG;
+
   beforeEach(() => {
     vi.resetModules();
     delete process.env.GEMINI_BINARY;
     delete process.env.GEMINI_POOL_ENABLED;
+    process.env.GEMINI_DISABLE_PDEATHSIG = "1";
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.doUnmock("node:child_process");
+    if (originalDisablePdeathsig === undefined) delete process.env.GEMINI_DISABLE_PDEATHSIG;
+    else process.env.GEMINI_DISABLE_PDEATHSIG = originalDisablePdeathsig;
   });
 
   it("uses GEMINI_BINARY env var in module-level constant (spawn receives it)", async () => {
@@ -191,5 +200,54 @@ describe("SETUP_MODE suppresses warm pool", () => {
     } finally {
       delete process.env.GEMINI_POOL_ENABLED;
     }
+  });
+});
+
+describe("GEMINI_ORPHAN_REAPER kill-switch (issue #99)", () => {
+  // The reaper is fire-and-forget at module load. Both the documented kill
+  // switch (GEMINI_ORPHAN_REAPER=0) and SETUP_MODE must short-circuit it
+  // before reapOrphans() is called — a refactor that accidentally inverts
+  // either guard would otherwise leave no test signal.
+
+  const originalEnv = process.env.GEMINI_ORPHAN_REAPER;
+  const reapSpy = vi.hoisted(() => vi.fn().mockResolvedValue({ reaped: 0, failed: 0 }));
+
+  beforeEach(() => {
+    vi.resetModules();
+    delete process.env.GEMINI_BINARY;
+    delete process.env.GEMINI_POOL_ENABLED;
+    process.env.GEMINI_POOL_ENABLED = "0"; // avoid warm-pool spawn side effects
+    reapSpy.mockClear();
+    vi.doMock("../src/orphan-reaper.js", () => ({
+      reapOrphans: reapSpy,
+      _resetSubreaperCacheForTest: () => {},
+    }));
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../src/orphan-reaper.js");
+    delete process.env.GEMINI_POOL_ENABLED;
+    if (originalEnv === undefined) delete process.env.GEMINI_ORPHAN_REAPER;
+    else process.env.GEMINI_ORPHAN_REAPER = originalEnv;
+  });
+
+  it("calls reapOrphans by default (env unset)", async () => {
+    delete process.env.GEMINI_ORPHAN_REAPER;
+    await import("../src/gemini-runner.js");
+    expect(reapSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT call reapOrphans when GEMINI_ORPHAN_REAPER=0", async () => {
+    process.env.GEMINI_ORPHAN_REAPER = "0";
+    await import("../src/gemini-runner.js");
+    expect(reapSpy).not.toHaveBeenCalled();
+  });
+
+  it("still calls reapOrphans for non-'0' values (only literal '0' disables)", async () => {
+    // Matches the codebase convention for env-var booleans (cf. the
+    // GEMINI_DISABLE_PDEATHSIG '1'-only contract in process-group.ts).
+    process.env.GEMINI_ORPHAN_REAPER = "false"; // not "0"
+    await import("../src/gemini-runner.js");
+    expect(reapSpy).toHaveBeenCalledTimes(1);
   });
 });
