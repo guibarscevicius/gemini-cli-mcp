@@ -380,7 +380,7 @@ export async function listMacosProcesses(): Promise<OrphanProcess[]> {
     const trimmed = line.trim();
     if (trimmed === "") continue;
     // Parse leading 4 numeric/dashed columns + remainder as command.
-    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d:\-]+)\s+(.*)$/.exec(line);
+    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d:-]+)\s+(.*)$/.exec(line);
     if (m === null) continue;
     const pid = Number.parseInt(m[1] ?? "", 10);
     const ppid = Number.parseInt(m[2] ?? "", 10);
