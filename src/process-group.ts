@@ -24,6 +24,11 @@ import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process"
 
 const POSIX = process.platform !== "win32";
 
+// Derive the signal type from ChildProcess.kill's signature so we don't have
+// to reference the `NodeJS.` global namespace directly (ESLint no-undef would
+// flag it; @types/node exposes NodeJS.Signals only in type-space).
+type Signal = NonNullable<Parameters<ChildProcess["kill"]>[0]>;
+
 /**
  * Spawn a child as a process-group leader on POSIX so that the entire group
  * (immediate child + grandchildren spawned by an npm shim) can be signaled
@@ -48,7 +53,7 @@ export function spawnInGroup(
  * already exited, has no PID yet, or the signal call threw (e.g. ESRCH when
  * the group is already gone). Never throws.
  */
-export function killGroup(cp: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): boolean {
+export function killGroup(cp: ChildProcess, signal: Signal = "SIGTERM"): boolean {
   if (cp.exitCode !== null) return false;
   const pid = cp.pid;
   if (pid === undefined) return false;
