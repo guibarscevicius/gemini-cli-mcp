@@ -2,6 +2,7 @@ import { countFileRefs, runGemini, spawnGemini, type GeminiExecutor } from "../g
 import * as jobStore from "../job-store.js";
 import type { ToolCallContext } from "../dispatcher.js";
 import { McpError, ErrorCode, type ElicitRequestFormParams } from "@modelcontextprotocol/sdk/types.js";
+import { killGroup } from "../process-group.js";
 import { mcpLog } from "../logging.js";
 
 /**
@@ -53,7 +54,7 @@ export async function runGeminiAsync(
       job.subprocess = cp;
       // Handle the race where cancelJob() ran before the subprocess was spawned.
       if (job.status === "cancelled") {
-        cp.kill("SIGTERM");
+        killGroup(cp, "SIGTERM");
         reject(new Error("Job was cancelled before subprocess started"));
         return;
       }
@@ -64,7 +65,7 @@ export async function runGeminiAsync(
       onProcessStart: (cp) => {
         job.subprocess = cp;
         if (job.status === "cancelled") {
-          cp.kill("SIGTERM");
+          killGroup(cp, "SIGTERM");
         }
       },
       onProcessEnd: () => {

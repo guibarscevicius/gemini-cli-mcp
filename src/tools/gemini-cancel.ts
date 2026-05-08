@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { McpError, ErrorCode, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import * as jobStore from "../job-store.js";
+import { killGroup } from "../process-group.js";
 import { unregisterByJobId } from "../request-map.js";
 import { mcpLog } from "../logging.js";
 
@@ -9,11 +10,11 @@ export const GeminiCancelSchema = z.object({
 });
 
 export interface GeminiCancelOutput {
-  cancelled: boolean;   // true if subprocess was killed
+  cancelled: boolean;   // true if the job transitioned from pending to cancelled
   alreadyDone: boolean; // true if job was already done/error/cancelled (idempotent)
 }
 
-/** Cancel an in-flight Gemini job by sending SIGTERM to its subprocess. */
+/** Cancel an in-flight Gemini job by sending SIGTERM to its subprocess group. */
 export async function geminiCancel(input: unknown): Promise<GeminiCancelOutput> {
   const { jobId } = GeminiCancelSchema.parse(input);
   const job = jobStore.getJob(jobId);
@@ -26,7 +27,7 @@ export async function geminiCancel(input: unknown): Promise<GeminiCancelOutput> 
     return { cancelled: false, alreadyDone: true };
   }
 
-  const killed = job.subprocess?.kill("SIGTERM") ?? false;
+  const killed = job.subprocess ? killGroup(job.subprocess, "SIGTERM") : false;
   process.stderr.write(`[gemini-cli-mcp] gemini-cancel: job ${jobId} cancelled (SIGTERM delivered: ${killed})\n`);
   mcpLog("info", "jobs", { event: "job_cancelled", jobId });
   jobStore.cancelJob(jobId);

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { readFile, realpath, unlink, writeFile } from "node:fs/promises";
@@ -9,6 +9,7 @@ import pLimit from "p-limit";
 import { WarmProcessPool, type WarmProcess } from "./warm-pool.js";
 import { mcpLog } from "./logging.js";
 import { getCapabilities, buildBaseArgs } from "./cli-capabilities.js";
+import { spawnInGroup, killGroup } from "./process-group.js";
 
 export class GeminiOutputError extends Error {
   constructor(message: string, public sanitizedMessage: string) {
@@ -409,7 +410,7 @@ export function runWithWarmProcess(
     };
 
     timeoutHandle = setTimeout(() => {
-      try { cp.kill("SIGTERM"); } catch { /* already dead */ }
+      killGroup(cp, "SIGTERM");
       settle(() => reject(new Error(`Gemini warm process timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
 
@@ -510,7 +511,7 @@ export function spawnGemini(
   onDone: (fullText: string) => void,
   onError: (err: Error) => void
 ): ChildProcess {
-  const cp = spawn(GEMINI_BINARY, args, {
+  const cp = spawnInGroup(GEMINI_BINARY, args, {
     env: spawnOpts.env,
     cwd: spawnOpts.cwd,
     stdio: ["pipe", "pipe", "pipe"],
@@ -532,7 +533,7 @@ export function spawnGemini(
   };
 
   timeoutHandle = setTimeout(() => {
-    cp.kill("SIGTERM");
+    killGroup(cp, "SIGTERM");
     settle(() =>
       onError(new Error(`Gemini subprocess timed out after ${spawnOpts.timeout}ms`))
     );

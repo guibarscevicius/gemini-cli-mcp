@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { killGroup } from "./process-group.js";
 import { unregisterByJobId } from "./request-map.js";
 import { mcpLog } from "./logging.js";
 
@@ -139,11 +140,7 @@ export async function shutdownPendingJobs(
 
     if (job.subprocess !== undefined) {
       subprocesses.push(job.subprocess);
-      try {
-        job.subprocess.kill("SIGTERM");
-      } catch {
-        // Ignore kill races; the follow-up cancellation still clears job state.
-      }
+      killGroup(job.subprocess, "SIGTERM");
     }
 
     cancelJobWithReason(jobId, reason);
@@ -186,11 +183,7 @@ export async function shutdownPendingJobs(
     const timer = setTimeout(() => {
       for (const subprocess of subprocesses) {
         if (subprocess.exitCode === null) {
-          try {
-            subprocess.kill("SIGKILL");
-          } catch {
-            // Process already exited between the liveness check and kill attempt.
-          }
+          killGroup(subprocess, "SIGKILL");
         }
       }
       finish();

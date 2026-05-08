@@ -18,7 +18,7 @@ type MockStdin = {
   end: ReturnType<typeof vi.fn>;
 };
 
-function makeMockCp(pid = 1): ChildProcess & {
+function makeMockCp(pid = 100): ChildProcess & {
   mockStdin: MockStdin;
   mockExit: (code: number) => void;
 } {
@@ -40,6 +40,9 @@ function makeMockCp(pid = 1): ChildProcess & {
 
   Object.assign(emitter, {
     pid,
+    // killGroup short-circuits when signalCode !== null; mocks must explicitly
+    // mirror the live ChildProcess shape (issue #96 follow-up).
+    signalCode: null,
     stdin,
     stderr: new EventEmitter(),
     kill: vi.fn((signal?: string) => {
@@ -64,8 +67,10 @@ vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
   return {
     ...original,
+    // Start mock PIDs at 100 — real children never get pid <= 1 and the new
+    // catastrophic-kill guard in killGroup refuses pid 0/1.
     spawn: vi.fn(() => {
-      const cp = makeMockCp(spawnCalls.length + 1);
+      const cp = makeMockCp(100 + spawnCalls.length);
       spawnCalls.push(cp);
       return cp;
     }),
@@ -84,12 +89,31 @@ const flushMicrotasks = () => Promise.resolve();
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("WarmProcessPool", () => {
+  let processKillSpy: ReturnType<typeof vi.spyOn> | undefined;
+
   beforeEach(() => {
     spawnCalls = [];
+    // Production code now signals the entire POSIX process group via
+    // process.kill(-pid, sig). Simulate group-kill propagation by finding the
+    // matching mock cp and triggering its exit (mirrors what the kernel does
+    // for a real child whose group leader is killed). Issue #96.
+    processKillSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((pid: number, _sig?: string | number) => {
+        if (pid < 0) {
+          const cp = spawnCalls.find((c) => c.pid === -pid);
+          if (cp && cp.exitCode === null) cp.mockExit(0);
+          return true;
+        }
+        // Should never be called with a positive pid in these tests; throw to
+        // surface accidental real-process signaling instead of silently passing.
+        throw new Error(`unexpected positive-pid process.kill in test: ${pid}`);
+      });
   });
 
   afterEach(async () => {
     vi.useRealTimers();
+    processKillSpy?.mockRestore();
   });
 
   // ── Construction ───────────────────────────────────────────────────────────
@@ -223,21 +247,54 @@ describe("WarmProcessPool", () => {
     await expect(pool.drain()).resolves.toBeUndefined();
   });
 
-  it("drain() kills all ready processes and resolves when they exit", async () => {
+  it("drain() kills the entire process group of every ready process", async () => {
     const pool = new WarmProcessPool(2, [], {});
     expect(pool.readyCount).toBe(2);
 
-    // drain() calls cp.kill("SIGTERM") — mock emits "exit" synchronously
+    // drain() now calls process.kill(-pid, "SIGTERM") to signal the whole
+    // POSIX process group; the spy in beforeEach mirrors that by triggering
+    // mockExit on the matching cp.  Issue #96.
     await pool.drain();
 
     expect(pool.readyCount).toBe(0);
-    // Both processes must have been sent SIGTERM
-    expect((spawnCalls[0].kill as ReturnType<typeof vi.fn>).mock.calls.some(
-      (args: unknown[]) => args[0] === "SIGTERM"
-    )).toBe(true);
-    expect((spawnCalls[1].kill as ReturnType<typeof vi.fn>).mock.calls.some(
-      (args: unknown[]) => args[0] === "SIGTERM"
-    )).toBe(true);
+    const groupKills = processKillSpy!.mock.calls.filter(([pid]) => (pid as number) < 0);
+    expect(groupKills).toEqual(
+      expect.arrayContaining([
+        [-spawnCalls[0].pid!, "SIGTERM"],
+        [-spawnCalls[1].pid!, "SIGTERM"],
+      ]),
+    );
+  });
+
+  it("drain() awaits the actual exit event before resolving", async () => {
+    // Hardens the previous test against a refactor that hoists the kill
+    // before the listener attachment. The default beforeEach spy fires
+    // mockExit synchronously inside process.kill, which would mask such a
+    // bug. Here we delay the exit until after drain has had a chance to
+    // resolve, and assert it doesn't.
+    const pool = new WarmProcessPool(1, [], {});
+    const cp = spawnCalls[0];
+
+    // Override: signal is "delivered" but we do NOT trigger mockExit.
+    processKillSpy!.mockImplementation((pid: number) => {
+      if (pid < 0) return true;
+      throw new Error(`unexpected positive-pid process.kill in test: ${pid}`);
+    });
+
+    let resolved = false;
+    const drainPromise = pool.drain().then(() => {
+      resolved = true;
+    });
+
+    // Flush whatever microtasks drain queues — without a real exit, it must wait.
+    await flushMicrotasks();
+    expect(resolved).toBe(false);
+
+    // Now propagate the kill: the kernel would deliver SIGTERM and the cp
+    // would emit "exit". Simulate that and confirm drain settles.
+    cp.mockExit(0);
+    await drainPromise;
+    expect(resolved).toBe(true);
   });
 
   it("drain() rejects pending waiters", async () => {

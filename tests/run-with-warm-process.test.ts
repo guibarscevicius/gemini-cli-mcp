@@ -29,6 +29,9 @@ function makeWarmProcess(): {
 
   Object.assign(cp, {
     pid: 42,
+    exitCode: null,
+    // killGroup also guards on signalCode (issue #96 follow-up).
+    signalCode: null,
     stdout,
     stdin: { write: stdinWrite, end: stdinEnd },
     stderr: new EventEmitter(),
@@ -248,15 +251,28 @@ describe("runWithWarmProcess", () => {
 
   // ── Timeout ───────────────────────────────────────────────────────────────
 
-  it("rejects on timeout and kills the process", async () => {
+  it("rejects on timeout and kills the entire process group", async () => {
     vi.useFakeTimers();
-    const { wp } = makeWarmProcess();
-    const promise = runWithWarmProcess(wp, "hi", 100, undefined);
+    // Spy on process.kill so the production POSIX group-kill is captured here
+    // instead of escaping to the real kernel.  Issue #96.
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((pid: number) => {
+        if (pid < 0) return true;
+        throw new Error(`unexpected positive-pid process.kill in test: ${pid}`);
+      });
 
-    const check = expect(promise).rejects.toThrow("timed out after 100ms");
-    await vi.advanceTimersByTimeAsync(110);
-    await check;
+    try {
+      const { wp } = makeWarmProcess();
+      const promise = runWithWarmProcess(wp, "hi", 100, undefined);
 
-    expect((wp.cp.kill as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+      const check = expect(promise).rejects.toThrow("timed out after 100ms");
+      await vi.advanceTimersByTimeAsync(110);
+      await check;
+
+      expect(killSpy).toHaveBeenCalledWith(-wp.pid!, "SIGTERM");
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 });
