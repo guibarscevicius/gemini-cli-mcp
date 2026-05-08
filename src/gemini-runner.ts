@@ -10,6 +10,7 @@ import { WarmProcessPool, type WarmProcess } from "./warm-pool.js";
 import { mcpLog } from "./logging.js";
 import { getCapabilities, buildBaseArgs, GEMINI_CHILD_ENV_OVERRIDES } from "./cli-capabilities.js";
 import { spawnInGroup, killGroup } from "./process-group.js";
+import { reapOrphans } from "./orphan-reaper.js";
 
 export class GeminiOutputError extends Error {
   constructor(message: string, public sanitizedMessage: string) {
@@ -164,6 +165,28 @@ export let warmPool: WarmProcessPool | null = null;
 // Suppress pool init during --setup: the pool would try to spawn gemini immediately,
 // producing ENOENT noise if gemini isn't installed yet (exactly the case --setup handles).
 const SETUP_MODE = process.argv.includes("--setup");
+
+// Issue #99 — orphan reaper. Fire-and-forget at module load, before pool init.
+// The strict PPID==1 filter inside reapOrphans ensures it cannot false-positive
+// on our own newborn pool members (their PPID is our PID, not 1), so this is
+// safe to run concurrently with the WarmProcessPool constructor below. Gated
+// by GEMINI_ORPHAN_REAPER (default on; set to "0" to disable).
+if (!SETUP_MODE && process.env.GEMINI_ORPHAN_REAPER !== "0") {
+  const log =
+    process.env.GEMINI_STRUCTURED_LOGS === "1"
+      ? (event: Record<string, unknown>) => {
+          process.stderr.write(JSON.stringify(event) + "\n");
+        }
+      : undefined;
+  void reapOrphans({
+    signature: ["--yolo", "--output-format", "stream-json"],
+    log,
+  }).catch((err: unknown) => {
+    process.stderr.write(
+      `[gemini-cli-mcp] orphan reaper failed: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  });
+}
 
 if (POOL_ENABLED && !SETUP_MODE) {
   const geminiConfigDir = nodePath.join(os.homedir(), ".config", "gemini");

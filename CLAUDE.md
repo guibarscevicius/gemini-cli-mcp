@@ -61,6 +61,7 @@ Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed rel
 | `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded fallback args) |
 | `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list for `gemini-list-models` |
 | `GEMINI_DISABLE_PDEATHSIG` | `0` | `1` = skip the `setpriv --pdeathsig TERM` wrapper around child spawns (Linux only). Escape hatch for the issue #97 kernel-level PDEATHSIG safety net; only the literal string `"1"` disables. |
+| `GEMINI_ORPHAN_REAPER` | `1` | `0` = disable the issue #99 startup sweep that reaps PID-1-orphaned `gemini --yolo --output-format stream-json` workers belonging to the current user. POSIX-only; no-op on Windows. |
 
 ## Env vars set on every gemini child (issue #98)
 
