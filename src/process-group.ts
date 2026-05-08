@@ -33,17 +33,34 @@ const POSIX = process.platform !== "win32";
 // (graceful exit, SIGKILL, OOM, hard crash), the kernel synchronously
 // delivers SIGTERM to the child — no userspace shutdown handler required.
 //
-// Probed once at module load. Sync probe is fine: `setpriv --version` runs
-// in <5ms on every Linux distro that ships it, and `spawnInGroup` itself is
-// sync, so there's no convenient async hook anyway. Probe failure (timeout,
-// ENOENT, non-Linux) yields `null` and the wrapper falls through cleanly.
+// Probed once at module load. Sync probe is fine: it runs in <5ms on every
+// Linux distro that ships setpriv, and `spawnInGroup` itself is sync. We
+// probe the actual `--pdeathsig` invocation against `/bin/true` (not just
+// `--version`) because Ubuntu 18.04 / CentOS 7 ship util-linux 2.31 which
+// has the binary but lacks the flag — `--version` would falsely succeed
+// and every subsequent spawn would fail with "unrecognized option".
 
 function detectSetpriv(): string | null {
   if (process.platform !== "linux") return null;
   try {
-    execFileSync("setpriv", ["--version"], { timeout: 200, stdio: "ignore" });
+    execFileSync("setpriv", ["--pdeathsig", "TERM", "--", "true"], {
+      timeout: 200,
+      stdio: "ignore",
+    });
     return "setpriv";
-  } catch {
+  } catch (err: unknown) {
+    const code = (err as { code?: string } | null)?.code;
+    // ENOENT = setpriv not installed (expected fallback). Anything else
+    // (EACCES, ETIMEDOUT, non-zero exit from --pdeathsig unsupported, etc.)
+    // silently disables the entire issue #97 PDEATHSIG safety net. Surface
+    // it on stderr so users can debug rather than wonder why orphan workers
+    // survived a parent crash. Suppress when the user explicitly opted out.
+    if (code !== "ENOENT" && process.env.GEMINI_DISABLE_PDEATHSIG !== "1") {
+      process.stderr.write(
+        `[gemini-cli-mcp] setpriv --pdeathsig probe failed (${code ?? "non-zero exit"}): ` +
+          `PDEATHSIG safety net disabled. Set GEMINI_DISABLE_PDEATHSIG=1 to silence.\n`,
+      );
+    }
     return null;
   }
 }

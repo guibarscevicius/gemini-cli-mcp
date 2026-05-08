@@ -15,6 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { _resetSubreaperCacheForTest, type OrphanProcess } from "../src/orphan-reaper.js";
 
 // ── Module-level mocks for adapter tests ─────────────────────────────────────
 
@@ -43,6 +44,15 @@ beforeEach(() => {
   fsMock.readdirSync.mockReset();
   fsMock.readFileSync.mockReset();
   execFileMock.mockReset();
+});
+
+afterEach(() => {
+  // Module-level subreaper cache populates on first call to
+  // getDefaultSubreaperPids() and persists for the rest of the process.
+  // Without this reset, tests that omit `subreaperPids` (e.g. the default
+  // regression guard) would see whatever the first such test cached,
+  // making them order-dependent.
+  _resetSubreaperCacheForTest();
 });
 
 // ── reapOrphans business logic ───────────────────────────────────────────────
@@ -128,27 +138,33 @@ describe("reapOrphans (business logic)", () => {
     expect(killSpy).not.toHaveBeenCalled();
   });
 
-  it("SIGTERMs matching orphans, then re-checks and SIGKILLs survivors", async () => {
+  it("SIGTERMs matching orphans, then re-lists and SIGKILLs survivors", async () => {
     const { reapOrphans } = await import("../src/orphan-reaper.js");
     // Calls in order:
-    //   kill(1234, SIGTERM) → true (sent successfully)
+    //   listProcesses() → [1234, 5678]
+    //   kill(1234, SIGTERM) → true
     //   kill(5678, SIGTERM) → true
-    //   kill(1234, 0)       → false (gone — well-behaved)
-    //   kill(5678, 0)       → true  (survivor)
-    //   kill(5678, SIGKILL) → true  (forcibly killed)
+    //   listProcesses() → [5678 only]  (1234 died from SIGTERM, well-behaved)
+    //   kill(5678, SIGKILL) → true
+    const orphan = (pid: number, age: number): OrphanProcess => ({
+      pid,
+      ppid: 1,
+      uid: 1000,
+      cmdline: "gemini --yolo",
+      ageSeconds: age,
+    });
+    const listProcesses = vi
+      .fn<() => Promise<OrphanProcess[]>>()
+      .mockResolvedValueOnce([orphan(1234, 60), orphan(5678, 90)])
+      .mockResolvedValueOnce([orphan(5678, 92)]); // only 5678 survives
     const callLog: Array<[number, NodeJS.Signals | 0]> = [];
     const kill = vi.fn((pid: number, signal: NodeJS.Signals | 0) => {
       callLog.push([pid, signal]);
-      if (signal === "SIGTERM") return true;
-      if (signal === 0) return pid === 5678; // 1234 already gone
-      return true; // SIGKILL succeeded
+      return true;
     });
     const result = await reapOrphans({
       signature: ["--yolo"],
-      listProcesses: async () => [
-        { pid: 1234, ppid: 1, uid: 1000, cmdline: "gemini --yolo", ageSeconds: 60 },
-        { pid: 5678, ppid: 1, uid: 1000, cmdline: "gemini --yolo", ageSeconds: 90 },
-      ],
+      listProcesses,
       getuid: () => 1000,
       kill,
       forceKillDelayMs: 0,
@@ -157,25 +173,32 @@ describe("reapOrphans (business logic)", () => {
     expect(callLog).toEqual([
       [1234, "SIGTERM"],
       [5678, "SIGTERM"],
-      [1234, 0],
-      [5678, 0],
       [5678, "SIGKILL"],
     ]);
+    expect(listProcesses).toHaveBeenCalledTimes(2);
   });
 
   it("counts a process as failed when SIGKILL also fails", async () => {
     const { reapOrphans } = await import("../src/orphan-reaper.js");
+    const orphan: OrphanProcess = {
+      pid: 1234,
+      ppid: 1,
+      uid: 1000,
+      cmdline: "gemini --yolo",
+      ageSeconds: 60,
+    };
+    const listProcesses = vi
+      .fn<() => Promise<OrphanProcess[]>>()
+      .mockResolvedValueOnce([orphan])
+      .mockResolvedValueOnce([orphan]); // still there → SIGKILL escalation
     const kill = vi.fn((_pid: number, signal: NodeJS.Signals | 0) => {
       if (signal === "SIGTERM") return true;
-      if (signal === 0) return true;     // still alive after wait
-      if (signal === "SIGKILL") return false; // SIGKILL also failed (perms / weird)
+      if (signal === "SIGKILL") return false; // perms / weird kernel state
       return false;
     });
     const result = await reapOrphans({
       signature: ["--yolo"],
-      listProcesses: async () => [
-        { pid: 1234, ppid: 1, uid: 1000, cmdline: "gemini --yolo", ageSeconds: 60 },
-      ],
+      listProcesses,
       getuid: () => 1000,
       kill,
       forceKillDelayMs: 0,
@@ -187,17 +210,22 @@ describe("reapOrphans (business logic)", () => {
     const { reapOrphans } = await import("../src/orphan-reaper.js");
     const events: Array<Record<string, unknown>> = [];
     const log = (e: Record<string, unknown>) => events.push(e);
-    const kill = (_pid: number, signal: NodeJS.Signals | 0) => {
-      if (signal === 0) return true;  // survivor → triggers SIGKILL
-      return true;
+    const orphan: OrphanProcess = {
+      pid: 1234,
+      ppid: 1,
+      uid: 1000,
+      cmdline: "gemini --yolo --output-format stream-json",
+      ageSeconds: 120,
     };
+    const listProcesses = vi
+      .fn<() => Promise<OrphanProcess[]>>()
+      .mockResolvedValueOnce([orphan])
+      .mockResolvedValueOnce([orphan]); // survivor → triggers SIGKILL
     await reapOrphans({
       signature: ["--yolo"],
-      listProcesses: async () => [
-        { pid: 1234, ppid: 1, uid: 1000, cmdline: "gemini --yolo --output-format stream-json", ageSeconds: 120 },
-      ],
+      listProcesses,
       getuid: () => 1000,
-      kill,
+      kill: () => true,
       log,
       forceKillDelayMs: 0,
     });
@@ -241,6 +269,89 @@ describe("reapOrphans (business logic)", () => {
     // 1234 fails (kill threw on SIGTERM); 5678 succeeds.
     expect(result.reaped).toBe(1);
     expect(result.failed).toBe(1);
+  });
+
+  it("does NOT SIGKILL a PID whose cmdline no longer matches (PID-reuse race protection)", async () => {
+    // Between SIGTERM and SIGKILL the kernel may reuse a freed PID for an
+    // unrelated same-user process. The re-list step must filter by signature
+    // again, not just liveness, so SIGKILL never lands on the wrong target.
+    const { reapOrphans } = await import("../src/orphan-reaper.js");
+    const killSpy = vi.fn(() => true);
+    const listProcesses = vi
+      .fn<() => Promise<OrphanProcess[]>>()
+      .mockResolvedValueOnce([
+        { pid: 4242, ppid: 1, uid: 1000, cmdline: "gemini --yolo --output-format stream-json", ageSeconds: 60 },
+      ])
+      // Re-list: same PID is now an unrelated process (kernel reused 4242)
+      .mockResolvedValueOnce([
+        { pid: 4242, ppid: 1234, uid: 1000, cmdline: "vim notes.md", ageSeconds: 0 },
+      ]);
+    const result = await reapOrphans({
+      signature: ["--yolo", "--output-format", "stream-json"],
+      listProcesses,
+      getuid: () => 1000,
+      kill: killSpy,
+      forceKillDelayMs: 0,
+    });
+    // SIGTERM goes out (we believed it was the orphan at the time), but
+    // SIGKILL must not fire on the recycled PID.
+    expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(killSpy).not.toHaveBeenCalledWith(4242, "SIGKILL");
+    // Counted as reaped — either the original orphan died (best case) or we
+    // dodged the race; both are correct outcomes for the user.
+    expect(result).toEqual({ reaped: 1, failed: 0 });
+  });
+
+  it("logs adapter failure to stderr + structured log when listProcesses() rejects", async () => {
+    // A fully-broken reaper that returned {0,0} silently would be invisible.
+    // The sweep is a safety net; silent breakage of a safety net defeats it.
+    const { reapOrphans } = await import("../src/orphan-reaper.js");
+    const events: Array<Record<string, unknown>> = [];
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const result = await reapOrphans({
+        signature: ["--yolo"],
+        listProcesses: async () => {
+          throw Object.assign(new Error("EACCES /proc"), { code: "EACCES" });
+        },
+        getuid: () => 1000,
+        kill: () => true,
+        log: (e) => events.push(e),
+      });
+      expect(result).toEqual({ reaped: 0, failed: 0 });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ event: "orphan_reaper_list_failed" });
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const written = String(stderrSpy.mock.calls[0]?.[0] ?? "");
+      expect(written).toContain("orphan reaper");
+      expect(written).toContain("EACCES");
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("skips SIGKILL escalation when the re-list call fails (conservative fallback)", async () => {
+    // If the re-list itself fails, we cannot safely SIGKILL — we'd be
+    // guessing about cmdline match. The sweep returns based on SIGTERM
+    // success and the next startup catches any stragglers.
+    const { reapOrphans } = await import("../src/orphan-reaper.js");
+    const killSpy = vi.fn(() => true);
+    const listProcesses = vi
+      .fn<() => Promise<OrphanProcess[]>>()
+      .mockResolvedValueOnce([
+        { pid: 1234, ppid: 1, uid: 1000, cmdline: "gemini --yolo", ageSeconds: 60 },
+      ])
+      .mockRejectedValueOnce(new Error("re-list failed"));
+    const result = await reapOrphans({
+      signature: ["--yolo"],
+      listProcesses,
+      getuid: () => 1000,
+      kill: killSpy,
+      forceKillDelayMs: 0,
+    });
+    expect(killSpy).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(killSpy).not.toHaveBeenCalledWith(1234, "SIGKILL");
+    expect(result).toEqual({ reaped: 1, failed: 0 });
   });
 
   it("returns {reaped:0,failed:0} on unsupported platforms (no listProcesses default)", async () => {

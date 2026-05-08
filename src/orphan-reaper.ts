@@ -6,13 +6,14 @@
  * orphans from older MCP server versions and any future regression in the
  * kill path do not self-clean. On startup, before the warm pool spawns, we
  * sweep the process table for `gemini --yolo --output-format stream-json`
- * processes whose parent is PID 1 (orphaned) and whose owner UID matches us,
- * SIGTERM them, wait, then SIGKILL survivors.
+ * processes whose parent is in the subreaper set (PID 1 ∪ root-owned
+ * ancestors of our PID — see `findLinuxSubreaperAncestors`) and whose owner
+ * UID matches us, SIGTERM them, wait, then SIGKILL survivors.
  *
- * The strict PPID==1 filter is what makes module-load fire-and-forget safe:
- * our own newborn pool members have PPID == our PID until we ourselves die,
- * so the reaper cannot false-positive on them even when running concurrently
- * with pool startup.
+ * The strict subreaper-set membership filter is what makes module-load
+ * fire-and-forget safe: our own newborn pool members have PPID == our PID,
+ * never one of our root-owned ancestors, so the reaper cannot false-positive
+ * on them even when running concurrently with pool startup.
  *
  * POSIX-only. Linux uses /proc; macOS uses `ps -A`. Windows: no-op (no
  * PID-1 reparenting; the underlying leak is POSIX-specific anyway).
@@ -46,7 +47,7 @@ export interface ReapOpts {
    * (root-owned ancestors of process.pid on Linux). Override for tests or
    * environments where automatic discovery is wrong.
    *
-   * Why this is not just {1}: since Linux 2.6.36 a process can register as
+   * Why this is not just {1}: since Linux 3.4 a process can register as
    * a "child subreaper" via prctl(PR_SET_CHILD_SUBREAPER); the kernel then
    * reparents orphaned descendants of that process to the subreaper instead
    * of PID 1. WSL2's per-namespace `/init`, systemd-user, container
@@ -95,9 +96,12 @@ function matchesSignature(cmdline: string, signature: readonly string[]): boolea
  * to via the subreaper mechanism. PID 1 is always added.
  *
  * Non-root ancestors (user shell, the host that spawned us) are deliberately
- * skipped: orphans can't be reparented to them by definition (they're not
- * subreapers of root processes), and including them would risk killing
- * sibling MCP-server warm-pool members spawned by the same shell.
+ * skipped. Root-ownership is a practical proxy for "system-level subreaper":
+ * any process can call prctl(PR_SET_CHILD_SUBREAPER) regardless of UID, but
+ * the subreapers we actually want to handle (systemd PID 1, WSL2 /init,
+ * systemd-user@<root>, container runtimes) are root-owned in practice.
+ * Including user-owned ancestors would risk killing sibling MCP-server
+ * warm-pool members spawned by the same shell or process tree.
  *
  * Returns a set with `1` always present; on non-Linux returns just `{1}`.
  */
@@ -157,8 +161,20 @@ export async function reapOrphans(opts: ReapOpts): Promise<ReapResult> {
   let candidates: OrphanProcess[];
   try {
     candidates = await list();
-  } catch {
-    // Adapter failure (filesystem race, ps not on PATH, etc.) — silently no-op.
+  } catch (err: unknown) {
+    // Adapter failure (filesystem race, ps not on PATH, etc.) — no-op the
+    // sweep but surface the failure. A fully-broken reaper that returns 0/0
+    // would be invisible; the sweep is a safety net and silent breakage of
+    // a safety net defeats the point.
+    const msg = err instanceof Error ? err.message : String(err);
+    log({
+      ts: new Date().toISOString(),
+      event: "orphan_reaper_list_failed",
+      error: msg,
+    });
+    process.stderr.write(
+      `[gemini-cli-mcp] orphan reaper: process list failed (${msg}) — sweep skipped\n`,
+    );
     return { reaped: 0, failed: 0 };
   }
 
@@ -194,25 +210,57 @@ export async function reapOrphans(opts: ReapOpts): Promise<ReapResult> {
     if (ok) signaled.set(p.pid, p);
   }
 
-  // Phase 2 — wait, then check for survivors and SIGKILL them.
+  // Phase 2 — wait, then re-verify each survivor before SIGKILL.
   if (forceKillDelayMs > 0) await sleep(forceKillDelayMs);
 
   let reaped = 0;
   let failed = matches.length - signaled.size; // SIGTERM-failed pids count as failed
 
+  // Re-fetch the process table so SIGKILL only fires on PIDs that still
+  // match the original UID + cmdline signature. Without this, the kernel
+  // could have reused a SIGTERMed PID during the wait window for an
+  // unrelated same-user process, and our SIGKILL would hit the wrong
+  // target. Re-listing is cheap (small table on a startup-time sweep) and
+  // the safety win is unrecoverable if we get it wrong.
+  let surviving: Map<number, OrphanProcess>;
+  try {
+    const refreshed = await list();
+    surviving = new Map(
+      refreshed
+        .filter(
+          (p) =>
+            signaled.has(p.pid) &&
+            p.uid === myUid &&
+            matchesSignature(p.cmdline, opts.signature),
+        )
+        .map((p) => [p.pid, p]),
+    );
+  } catch {
+    // Re-list failed mid-sweep — skip SIGKILL escalation entirely. SIGTERM
+    // is the typical happy path for the gemini CLI; stragglers (if any) are
+    // caught on the next startup sweep. Counting all signaled as `reaped`
+    // would overstate; counting all as `failed` would understate. Report
+    // the SIGTERM ack count, which is the only thing we can verify.
+    return { reaped: signaled.size, failed };
+  }
+
   for (const p of signaled.values()) {
-    const stillAlive = tryKill(kill, p.pid, 0);
-    if (!stillAlive) {
+    if (!surviving.has(p.pid)) {
+      // Either the process is gone (SIGTERM worked — happy path) or its
+      // PID was reused by an unrelated process (race we just dodged). In
+      // both cases, do NOT escalate to SIGKILL. Counting as reaped is
+      // accurate for the happy path and conservative for the race.
       reaped++;
       continue;
     }
+    const survivor = surviving.get(p.pid)!;
     const killed = tryKill(kill, p.pid, "SIGKILL");
     log({
       ts: new Date().toISOString(),
       event: "orphan_reaped",
       pid: p.pid,
-      age_seconds: p.ageSeconds,
-      cmdline: p.cmdline.slice(0, 200),
+      age_seconds: survivor.ageSeconds,
+      cmdline: survivor.cmdline.slice(0, 200),
       signal: "SIGKILL",
       ok: killed,
     });
