@@ -23,8 +23,8 @@ const POSIX = process.platform !== "win32";
 
 /**
  * Spawn a child as a process-group leader on POSIX so that the entire group
- * (immediate child + grandchildren spawned by an npm shim) can be signaled
- * together via {@link killGroup}.
+ * (CLI process + tool subprocesses or MCP subservers it may fork) can be
+ * signaled together via {@link killGroup}.
  *
  * The `detached` option is omitted from the parameter type because this helper
  * sets it unconditionally — letting a caller pass `detached: false` would

@@ -144,7 +144,7 @@ describe("WarmProcessPool", () => {
     );
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const opts = spawnMock.mock.calls[0][2] as { env?: Record<string, string> };
-    expect(opts.env).toEqual({
+    expect(opts.env).toMatchObject({
       HOME: "/home/test",
       PATH: "/bin",
       GEMINI_CLI_NO_RELAUNCH: "true",

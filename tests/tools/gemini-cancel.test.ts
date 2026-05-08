@@ -44,8 +44,9 @@ describe("geminiCancel", () => {
     try {
       const result = await geminiCancel({ jobId: VALID_JOB_ID });
 
-      // Issue #96: cancel must signal the *group* (negative pid), not just the
-      // immediate child via cp.kill — the latter leaks the npm-shim grandchild.
+      // Issues #96/#98: cancel must signal the *group* (negative pid), not just
+      // the immediate child via cp.kill — the latter would not reach tool
+      // subprocesses the CLI may fork (shell tools, MCP subservers).
       expect(processKillSpy).toHaveBeenCalledWith(-4321, "SIGTERM");
       expect(mockKill).not.toHaveBeenCalled();
       expect(mockCancelJob).toHaveBeenCalledWith(VALID_JOB_ID);

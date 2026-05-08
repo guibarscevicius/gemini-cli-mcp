@@ -129,6 +129,48 @@ describe("GEMINI_BINARY constant in spawn calls", () => {
       expect.any(Object)
     );
   });
+
+  // Issue #98: spawnGemini's cold-spawn path must inject GEMINI_CHILD_ENV_OVERRIDES
+  // into the child env so the upstream CLI's runtime self-relaunch is disabled.
+  // Warm pool covers the dominant path; this test guards the fallback.
+  it("merges GEMINI_CHILD_ENV_OVERRIDES into spawnGemini's child env", async () => {
+    process.env.GEMINI_BINARY = "/my/custom/gemini";
+    process.env.GEMINI_POOL_ENABLED = "0";
+
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:child_process")>();
+      const mockSpawn = vi.fn().mockReturnValue({
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        stdin: { end: vi.fn() },
+        on: vi.fn(),
+        kill: vi.fn(),
+        pid: 123,
+        exitCode: null,
+      });
+      return { ...actual, spawn: mockSpawn };
+    });
+
+    const mod = await import("../src/gemini-runner.js");
+    const { spawn } = await import("node:child_process");
+    const mockSpawn = spawn as unknown as ReturnType<typeof vi.fn>;
+
+    mod.spawnGemini(
+      ["--prompt", "test"],
+      { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+      () => {},
+      () => {},
+      () => {}
+    );
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const opts = mockSpawn.mock.calls[0][2] as { env?: Record<string, string> };
+    expect(opts.env).toMatchObject({
+      HOME: "/home/test",
+      PATH: "/usr/bin",
+      GEMINI_CLI_NO_RELAUNCH: "true",
+    });
+  });
 });
 
 describe("SETUP_MODE suppresses warm pool", () => {

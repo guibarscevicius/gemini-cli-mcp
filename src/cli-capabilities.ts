@@ -32,7 +32,8 @@ const DETECTION_TIMEOUT_MS = 5_000;
  * Env vars injected into every gemini child process.
  *
  * `GEMINI_CLI_NO_RELAUNCH=true` short-circuits @google/gemini-cli's runtime
- * self-relaunch (relaunchAppInChildProcess in packages/cli/src/utils/relaunch.ts),
+ * self-relaunch (`relaunchAppInChildProcess`, located at
+ * `packages/cli/src/utils/relaunch.ts` in v0.38.x of upstream),
  * which would otherwise spawn a second `node --max-old-space-size=<50% RAM>`
  * to inherit a larger heap. With one Node process per warm-pool slot we get a
  * flatter process tree, faster pool startup, and no shim-signal-propagation
