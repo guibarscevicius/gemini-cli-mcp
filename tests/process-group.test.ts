@@ -221,6 +221,9 @@ describe("process-group helpers (Windows simulated)", () => {
     spawnInGroup("cmd", ["/c", "echo hi"], { stdio: "ignore" });
     expect(lastSpawnArgs).not.toBeNull();
     expect(lastSpawnArgs!.options.detached).toBe(false);
+    // On Windows the setpriv wrapper must never apply — process group / pdeathsig
+    // are POSIX-only concepts and `setpriv` would not exist anyway.
+    expect(lastSpawnArgs!.command).toBe("cmd");
   });
 
   it("killGroup falls back to cp.kill(signal) on Windows", async () => {
@@ -256,3 +259,100 @@ describe("process-group helpers (Windows simulated)", () => {
     }
   });
 });
+
+// ── PR_SET_PDEATHSIG wrapper (issue #97) ─────────────────────────────────────
+//
+// On Linux, `setpriv --pdeathsig TERM -- <cmd>` makes the kernel deliver
+// SIGTERM to the child the moment its parent dies — the safety net that runs
+// even when our JS shutdown handler doesn't (SIGKILL, OOM, hard crash).
+//
+// `_setSetprivPathForTest` is a test-only export that overrides the
+// module-level cached probe so we can deterministically simulate
+// "setpriv installed" / "setpriv missing" without relying on the host.
+
+describe("spawnInGroup setpriv pdeathsig wrap (Linux)", () => {
+  const originalDisable = process.env.GEMINI_DISABLE_PDEATHSIG;
+
+  beforeEach(() => {
+    delete process.env.GEMINI_DISABLE_PDEATHSIG;
+  });
+
+  afterEach(async () => {
+    if (originalDisable === undefined) delete process.env.GEMINI_DISABLE_PDEATHSIG;
+    else process.env.GEMINI_DISABLE_PDEATHSIG = originalDisable;
+    // Restore real probe result for any subsequent suite.
+    const { _setSetprivPathForTest } = await import("../src/process-group.js");
+    _setSetprivPathForTest(undefined);
+  });
+
+  it("wraps the command with `setpriv --pdeathsig TERM --` when setpriv is available on Linux", async () => {
+    if (process.platform !== "linux") return; // simulator only — Linux semantics
+    const { spawnInGroup, _setSetprivPathForTest } = await import("../src/process-group.js");
+    _setSetprivPathForTest("/usr/bin/setpriv");
+    spawnInGroup("gemini", ["--yolo"], { stdio: "ignore" });
+    expect(lastSpawnArgs).not.toBeNull();
+    expect(lastSpawnArgs!.command).toBe("/usr/bin/setpriv");
+    expect(lastSpawnArgs!.args).toEqual(["--pdeathsig", "TERM", "--", "gemini", "--yolo"]);
+    // Process-group leadership must still apply — the setpriv shim becomes the
+    // group leader and the real CLI inherits the group, so killGroup() works.
+    expect(lastSpawnArgs!.options.detached).toBe(true);
+    // Caller-supplied options are preserved.
+    expect(lastSpawnArgs!.options.stdio).toBe("ignore");
+  });
+
+  it("falls through (no wrap) when setpriv is not installed on Linux", async () => {
+    if (process.platform !== "linux") return;
+    const { spawnInGroup, _setSetprivPathForTest } = await import("../src/process-group.js");
+    _setSetprivPathForTest(null);
+    spawnInGroup("gemini", ["--yolo"], { stdio: "ignore" });
+    expect(lastSpawnArgs!.command).toBe("gemini");
+    expect(lastSpawnArgs!.args).toEqual(["--yolo"]);
+    expect(lastSpawnArgs!.options.detached).toBe(true);
+  });
+
+  it("falls through (no wrap) when GEMINI_DISABLE_PDEATHSIG=1 even if setpriv is available", async () => {
+    if (process.platform !== "linux") return;
+    process.env.GEMINI_DISABLE_PDEATHSIG = "1";
+    const { spawnInGroup, _setSetprivPathForTest } = await import("../src/process-group.js");
+    _setSetprivPathForTest("/usr/bin/setpriv");
+    spawnInGroup("gemini", ["--yolo"], { stdio: "ignore" });
+    expect(lastSpawnArgs!.command).toBe("gemini");
+    expect(lastSpawnArgs!.args).toEqual(["--yolo"]);
+  });
+
+  it("falls through (no wrap) when GEMINI_DISABLE_PDEATHSIG is set to any non-'1' value? (only '1' disables)", async () => {
+    // Documents the contract: only the literal string "1" disables. "true",
+    // "yes", or empty string DO NOT disable — matches the codebase convention
+    // for env-var booleans (see GEMINI_POOL_ENABLED, GEMINI_STRUCTURED_LOGS).
+    if (process.platform !== "linux") return;
+    process.env.GEMINI_DISABLE_PDEATHSIG = "true"; // not "1"
+    const { spawnInGroup, _setSetprivPathForTest } = await import("../src/process-group.js");
+    _setSetprivPathForTest("/usr/bin/setpriv");
+    spawnInGroup("gemini", ["--yolo"], { stdio: "ignore" });
+    // "true" is not "1" — wrap remains active
+    expect(lastSpawnArgs!.command).toBe("/usr/bin/setpriv");
+  });
+});
+
+describe("spawnInGroup setpriv wrap is Linux-only", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    vi.resetModules();
+  });
+
+  it("does NOT wrap on macOS even if a setpriv path is configured", async () => {
+    // setpriv (util-linux) does not exist on macOS; even hypothetically forcing
+    // a path must not cause us to invoke a non-existent shim.
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    vi.resetModules();
+    const { spawnInGroup, _setSetprivPathForTest } = await import("../src/process-group.js");
+    _setSetprivPathForTest("/usr/bin/setpriv"); // hypothetical; should be ignored
+    spawnInGroup("gemini", ["--yolo"], { stdio: "ignore" });
+    expect(lastSpawnArgs!.command).toBe("gemini");
+    expect(lastSpawnArgs!.args).toEqual(["--yolo"]);
+    expect(lastSpawnArgs!.options.detached).toBe(true); // POSIX still applies
+  });
+});
+

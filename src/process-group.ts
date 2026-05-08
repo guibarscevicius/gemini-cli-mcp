@@ -15,11 +15,60 @@
  * subservers) that would otherwise be reparented to PID 1 if we only signaled
  * the CLI's PID. POSIX-only — Windows uses Job Objects with different
  * lifecycle semantics.
+ *
+ * Issue #97 layers a kernel-level safety net on top: on Linux we wrap the
+ * spawn with `setpriv --pdeathsig TERM --` so the kernel delivers SIGTERM to
+ * the child the moment its parent dies. That covers the failure modes the
+ * graceful shutdown path can't (SIGKILL, OOM, hard crash).
  */
 
-import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type SpawnOptions, type ChildProcess } from "node:child_process";
 
 const POSIX = process.platform !== "win32";
+
+// ── PR_SET_PDEATHSIG via setpriv (issue #97) ─────────────────────────────────
+//
+// `setpriv --pdeathsig TERM --` (util-linux ≥ 2.33) sets the kernel
+// PR_SET_PDEATHSIG flag on the child. When the parent dies for any reason
+// (graceful exit, SIGKILL, OOM, hard crash), the kernel synchronously
+// delivers SIGTERM to the child — no userspace shutdown handler required.
+//
+// Probed once at module load. Sync probe is fine: `setpriv --version` runs
+// in <5ms on every Linux distro that ships it, and `spawnInGroup` itself is
+// sync, so there's no convenient async hook anyway. Probe failure (timeout,
+// ENOENT, non-Linux) yields `null` and the wrapper falls through cleanly.
+
+function detectSetpriv(): string | null {
+  if (process.platform !== "linux") return null;
+  try {
+    execFileSync("setpriv", ["--version"], { timeout: 200, stdio: "ignore" });
+    return "setpriv";
+  } catch {
+    return null;
+  }
+}
+
+let setprivPath: string | null = detectSetpriv();
+
+/**
+ * @internal Test-only: override the cached setpriv probe result.
+ * Pass a string to simulate "setpriv installed at this path", `null` to
+ * simulate "setpriv not installed", or `undefined` to re-run the real probe.
+ */
+export function _setSetprivPathForTest(path: string | null | undefined): void {
+  setprivPath = path === undefined ? detectSetpriv() : path;
+}
+
+function shouldWrapWithSetpriv(): boolean {
+  // Linux-only (no PR_SET_PDEATHSIG on macOS / BSD; Windows uses Job Objects).
+  // The escape hatch matches the codebase convention: only the literal "1"
+  // disables — anything else (incl. "true", "yes", empty) is treated as opt-in.
+  return (
+    setprivPath !== null &&
+    process.platform === "linux" &&
+    process.env.GEMINI_DISABLE_PDEATHSIG !== "1"
+  );
+}
 
 /**
  * Spawn a child as a process-group leader on POSIX so that the entire group
@@ -39,6 +88,16 @@ export function spawnInGroup(
   args: readonly string[],
   options: Omit<SpawnOptions, "detached">,
 ): ChildProcess {
+  if (shouldWrapWithSetpriv()) {
+    // The setpriv shim becomes the group leader and the real CLI inherits the
+    // group, so killGroup() still reaches both. The shim is ~one extra exec
+    // layer (negligible vs. the CLI's multi-second startup).
+    return spawn(
+      setprivPath!,
+      ["--pdeathsig", "TERM", "--", command, ...args],
+      { ...options, detached: POSIX },
+    );
+  }
   return spawn(command, args, { ...options, detached: POSIX });
 }
 

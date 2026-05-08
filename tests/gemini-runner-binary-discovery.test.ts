@@ -81,15 +81,24 @@ describe("discoverGeminiBinary", () => {
 });
 
 describe("GEMINI_BINARY constant in spawn calls", () => {
+  // These tests assert the exact binary `spawn` receives. Issue #97's setpriv
+  // wrap reshapes that on Linux (spawn is called with "setpriv" and the binary
+  // is in args). Disabling the wrap here keeps these tests focused on binary
+  // discovery — separate suite (process-group.test.ts) covers the wrap itself.
+  const originalDisablePdeathsig = process.env.GEMINI_DISABLE_PDEATHSIG;
+
   beforeEach(() => {
     vi.resetModules();
     delete process.env.GEMINI_BINARY;
     delete process.env.GEMINI_POOL_ENABLED;
+    process.env.GEMINI_DISABLE_PDEATHSIG = "1";
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.doUnmock("node:child_process");
+    if (originalDisablePdeathsig === undefined) delete process.env.GEMINI_DISABLE_PDEATHSIG;
+    else process.env.GEMINI_DISABLE_PDEATHSIG = originalDisablePdeathsig;
   });
 
   it("uses GEMINI_BINARY env var in module-level constant (spawn receives it)", async () => {

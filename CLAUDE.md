@@ -60,6 +60,7 @@ Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed rel
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection sweep interval (ms) |
 | `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded fallback args) |
 | `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list for `gemini-list-models` |
+| `GEMINI_DISABLE_PDEATHSIG` | `0` | `1` = skip the `setpriv --pdeathsig TERM` wrapper around child spawns (Linux only). Escape hatch for the issue #97 kernel-level PDEATHSIG safety net; only the literal string `"1"` disables. |
 
 ## Env vars set on every gemini child (issue #98)
 
