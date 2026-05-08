@@ -30,6 +30,8 @@ function makeWarmProcess(): {
   Object.assign(cp, {
     pid: 42,
     exitCode: null,
+    // killGroup also guards on signalCode (issue #96 follow-up).
+    signalCode: null,
     stdout,
     stdin: { write: stdinWrite, end: stdinEnd },
     stderr: new EventEmitter(),

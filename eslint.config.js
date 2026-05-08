@@ -13,6 +13,8 @@ const nodeGlobals = {
   Buffer: "readonly",
   __dirname: "readonly",
   __filename: "readonly",
+  // Used in type position (e.g. NodeJS.Signals); declared by @types/node.
+  NodeJS: "readonly",
 };
 
 export default [

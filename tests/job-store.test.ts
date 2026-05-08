@@ -155,33 +155,56 @@ describe("cancelJob", () => {
 });
 
 describe("shutdownPendingJobs", () => {
+  // Fake child shape required by killGroup: pid > 1, exitCode/signalCode null
+  // until the test emits "exit". Tests spy on process.kill (the POSIX
+  // group-kill path) rather than cp.kill (the Windows fallback). Issue #96.
+  type FakeCp = EventEmitter & {
+    kill: ReturnType<typeof vi.fn>;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    pid: number;
+  };
+
+  function makeCp(pid: number): FakeCp {
+    const cp = new EventEmitter() as FakeCp;
+    cp.exitCode = null;
+    cp.signalCode = null;
+    cp.pid = pid;
+    cp.kill = vi.fn(() => true);
+    return cp;
+  }
+
   it("resolves before the force-kill deadline when subprocesses exit after SIGTERM", async () => {
     vi.useFakeTimers();
     createJob("graceful-job");
 
-    const child = new EventEmitter() as EventEmitter & {
-      kill: ReturnType<typeof vi.fn>;
-      exitCode: number | null;
-    };
-    child.exitCode = null;
-    child.kill = vi.fn((signal: string) => {
-      if (signal === "SIGTERM") {
-        child.exitCode = 0;
-        child.emit("exit", 0, null);
-      }
-      return true;
-    });
+    const child = makeCp(54321);
     getJob("graceful-job")!.subprocess = child as any;
 
-    const shutdownPromise = shutdownPendingJobs("Server shutting down", 2000);
-    await Promise.resolve();
+    // Mock the kernel: SIGTERM to the group → set exitCode + emit "exit".
+    const processKillSpy = vi.spyOn(process, "kill").mockImplementation((pid: number, sig?: string | number) => {
+      if (pid === -54321 && sig === "SIGTERM") {
+        child.exitCode = 0;
+        child.emit("exit", 0, null);
+        return true;
+      }
+      throw new Error(`unexpected process.kill(${pid}, ${String(sig)})`);
+    });
 
-    await expect(shutdownPromise).resolves.toBeUndefined();
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    try {
+      const shutdownPromise = shutdownPendingJobs("Server shutting down", 2000);
+      await Promise.resolve();
 
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(child.kill).toHaveBeenCalledTimes(1);
+      await expect(shutdownPromise).resolves.toBeUndefined();
+      expect(processKillSpy).toHaveBeenCalledWith(-54321, "SIGTERM");
+      expect(child.kill).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2000);
+      // No SIGKILL escalation when SIGTERM already settled the child.
+      expect(processKillSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      processKillSpy.mockRestore();
+    }
   });
 
   it("cancels pending jobs, unregisters request ids, and sends SIGTERM then SIGKILL after grace period", async () => {
@@ -189,34 +212,38 @@ describe("shutdownPendingJobs", () => {
     createJob("shutdown-job");
     registerRequest("req-shutdown", "shutdown-job");
 
-    const child = new EventEmitter() as EventEmitter & {
-      kill: ReturnType<typeof vi.fn>;
-      exitCode: number | null;
-    };
-    child.exitCode = null;
-    child.kill = vi.fn((signal: string) => {
-      if (signal === "SIGKILL") {
+    const child = makeCp(98765);
+    getJob("shutdown-job")!.subprocess = child as any;
+
+    // Kernel mock: SIGTERM is ignored by the (hung) child; SIGKILL settles it.
+    const processKillSpy = vi.spyOn(process, "kill").mockImplementation((pid: number, sig?: string | number) => {
+      if (pid === -98765 && sig === "SIGKILL") {
         child.exitCode = 137;
+        child.emit("exit", null, "SIGKILL");
       }
       return true;
     });
-    getJob("shutdown-job")!.subprocess = child as any;
 
-    const completion = getJob("shutdown-job")!.completion;
-    const shutdownPromise = shutdownPendingJobs("Server shutting down", 2000);
+    try {
+      const completion = getJob("shutdown-job")!.completion;
+      const shutdownPromise = shutdownPendingJobs("Server shutting down", 2000);
 
-    await vi.advanceTimersByTimeAsync(1999);
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(processKillSpy).toHaveBeenCalledTimes(1);
+      expect(processKillSpy).toHaveBeenNthCalledWith(1, -98765, "SIGTERM");
 
-    await vi.advanceTimersByTimeAsync(1);
-    await shutdownPromise;
+      await vi.advanceTimersByTimeAsync(1);
+      await shutdownPromise;
 
-    expect(child.kill).toHaveBeenCalledTimes(2);
-    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
-    expect(getJob("shutdown-job")!.status).toBe("cancelled");
-    expect(getJobByRequestId("req-shutdown")).toBeUndefined();
-    await expect(completion).rejects.toThrow("Server shutting down");
+      expect(processKillSpy).toHaveBeenCalledTimes(2);
+      expect(processKillSpy).toHaveBeenNthCalledWith(2, -98765, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(getJob("shutdown-job")!.status).toBe("cancelled");
+      expect(getJobByRequestId("req-shutdown")).toBeUndefined();
+      await expect(completion).rejects.toThrow("Server shutting down");
+    } finally {
+      processKillSpy.mockRestore();
+    }
   });
 
   it("leaves completed and errored jobs untouched", async () => {

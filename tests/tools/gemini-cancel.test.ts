@@ -25,20 +25,34 @@ afterEach(() => {
 const VALID_JOB_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 describe("geminiCancel", () => {
-  it("kills subprocess and cancels the job when pending", async () => {
+  it("signals the entire process group and cancels the job when pending (issue #96)", async () => {
     const mockKill = vi.fn().mockReturnValue(true);
     mockGetJob.mockReturnValue({
       status: "pending",
       partialResponse: "",
-      subprocess: { kill: mockKill } as unknown as ChildProcess,
+      subprocess: {
+        kill: mockKill,
+        pid: 4321,
+        exitCode: null,
+        signalCode: null,
+      } as unknown as ChildProcess,
       createdAt: Date.now(),
     });
 
-    const result = await geminiCancel({ jobId: VALID_JOB_ID });
+    // Spy on the POSIX group-kill so the real kernel is never reached.
+    const processKillSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      const result = await geminiCancel({ jobId: VALID_JOB_ID });
 
-    expect(mockKill).toHaveBeenCalledWith("SIGTERM");
-    expect(mockCancelJob).toHaveBeenCalledWith(VALID_JOB_ID);
-    expect(result).toEqual({ cancelled: true, alreadyDone: false });
+      // Issue #96: cancel must signal the *group* (negative pid), not just the
+      // immediate child via cp.kill — the latter leaks the npm-shim grandchild.
+      expect(processKillSpy).toHaveBeenCalledWith(-4321, "SIGTERM");
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(mockCancelJob).toHaveBeenCalledWith(VALID_JOB_ID);
+      expect(result).toEqual({ cancelled: true, alreadyDone: false });
+    } finally {
+      processKillSpy.mockRestore();
+    }
   });
 
   it("works without a subprocess reference (no-op kill)", async () => {

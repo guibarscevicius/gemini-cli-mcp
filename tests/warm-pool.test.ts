@@ -18,7 +18,7 @@ type MockStdin = {
   end: ReturnType<typeof vi.fn>;
 };
 
-function makeMockCp(pid = 1): ChildProcess & {
+function makeMockCp(pid = 100): ChildProcess & {
   mockStdin: MockStdin;
   mockExit: (code: number) => void;
 } {
@@ -40,6 +40,9 @@ function makeMockCp(pid = 1): ChildProcess & {
 
   Object.assign(emitter, {
     pid,
+    // killGroup short-circuits when signalCode !== null; mocks must explicitly
+    // mirror the live ChildProcess shape (issue #96 follow-up).
+    signalCode: null,
     stdin,
     stderr: new EventEmitter(),
     kill: vi.fn((signal?: string) => {
@@ -64,8 +67,10 @@ vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
   return {
     ...original,
+    // Start mock PIDs at 100 — real children never get pid <= 1 and the new
+    // catastrophic-kill guard in killGroup refuses pid 0/1.
     spawn: vi.fn(() => {
-      const cp = makeMockCp(spawnCalls.length + 1);
+      const cp = makeMockCp(100 + spawnCalls.length);
       spawnCalls.push(cp);
       return cp;
     }),
@@ -259,6 +264,37 @@ describe("WarmProcessPool", () => {
         [-spawnCalls[1].pid!, "SIGTERM"],
       ]),
     );
+  });
+
+  it("drain() awaits the actual exit event before resolving", async () => {
+    // Hardens the previous test against a refactor that hoists the kill
+    // before the listener attachment. The default beforeEach spy fires
+    // mockExit synchronously inside process.kill, which would mask such a
+    // bug. Here we delay the exit until after drain has had a chance to
+    // resolve, and assert it doesn't.
+    const pool = new WarmProcessPool(1, [], {});
+    const cp = spawnCalls[0];
+
+    // Override: signal is "delivered" but we do NOT trigger mockExit.
+    processKillSpy!.mockImplementation((pid: number) => {
+      if (pid < 0) return true;
+      throw new Error(`unexpected positive-pid process.kill in test: ${pid}`);
+    });
+
+    let resolved = false;
+    const drainPromise = pool.drain().then(() => {
+      resolved = true;
+    });
+
+    // Flush whatever microtasks drain queues — without a real exit, it must wait.
+    await flushMicrotasks();
+    expect(resolved).toBe(false);
+
+    // Now propagate the kill: the kernel would deliver SIGTERM and the cp
+    // would emit "exit". Simulate that and confirm drain settles.
+    cp.mockExit(0);
+    await drainPromise;
+    expect(resolved).toBe(true);
   });
 
   it("drain() rejects pending waiters", async () => {

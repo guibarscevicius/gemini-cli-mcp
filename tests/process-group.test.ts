@@ -32,11 +32,16 @@ beforeEach(() => {
 
 // ── Helper: build a mock ChildProcess with a controllable exitCode ───────────
 
-function makeMockCp(opts: { pid?: number; exitCode?: number | null } = {}): ChildProcess {
+function makeMockCp(opts: {
+  pid?: number;
+  exitCode?: number | null;
+  signalCode?: NodeJS.Signals | null;
+} = {}): ChildProcess {
   const cp = new EventEmitter() as ChildProcess;
   Object.assign(cp, {
     pid: opts.pid ?? 12345,
     exitCode: opts.exitCode ?? null,
+    signalCode: opts.signalCode ?? null,
     kill: vi.fn(),
   });
   return cp;
@@ -99,13 +104,79 @@ describe("process-group helpers (POSIX)", () => {
 
   it("killGroup returns false when the child has already exited", async () => {
     const { killGroup } = await import("../src/process-group.js");
-    const cp = makeMockCp({ pid: 1, exitCode: 0 });
+    const cp = makeMockCp({ pid: 12345, exitCode: 0 });
     const spy = vi.spyOn(process, "kill").mockReturnValue(true);
     try {
       expect(killGroup(cp)).toBe(false);
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("killGroup returns false when the child was already signal-killed (signalCode set)", async () => {
+    // Issue #96 follow-up: when a child is killed by signal, Node leaves
+    // exitCode === null and sets signalCode. Without this guard, killGroup
+    // would re-signal a group whose PID may have been recycled.
+    const { killGroup } = await import("../src/process-group.js");
+    const cp = makeMockCp({ pid: 12345, exitCode: null, signalCode: "SIGTERM" });
+    const spy = vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      expect(killGroup(cp)).toBe(false);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("killGroup refuses to signal pid <= 1 (catastrophic-kill guard)", async () => {
+    // process.kill(-1, sig) signals every process the user can reach;
+    // process.kill(-0, sig) signals this process group. Both would be devastating.
+    const { killGroup } = await import("../src/process-group.js");
+    const spy = vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      expect(killGroup(makeMockCp({ pid: 0 }))).toBe(false);
+      expect(killGroup(makeMockCp({ pid: 1 }))).toBe(false);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("killGroup logs unexpected (non-ESRCH) errno to stderr", async () => {
+    // Real misconfigurations (EPERM, EINVAL) should never silently masquerade
+    // as "child already exited" — drain would resolve while the group is alive.
+    const { killGroup } = await import("../src/process-group.js");
+    const cp = makeMockCp({ pid: 9999 });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    });
+    try {
+      expect(killGroup(cp, "SIGTERM")).toBe(false);
+      const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(output).toContain("EPERM");
+      expect(output).toContain("group -9999");
+    } finally {
+      killSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("killGroup stays silent on ESRCH (group already gone is the expected race)", async () => {
+    const { killGroup } = await import("../src/process-group.js");
+    const cp = makeMockCp({ pid: 9999 });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    });
+    try {
+      expect(killGroup(cp, "SIGTERM")).toBe(false);
+      // ESRCH is the documented benign case; no log should be emitted.
+      expect(stderrSpy).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
+      stderrSpy.mockRestore();
     }
   });
 
@@ -143,7 +214,9 @@ describe("process-group helpers (Windows simulated)", () => {
     vi.resetModules();
   });
 
-  it("spawnInGroup omits detached on Windows", async () => {
+  it("spawnInGroup passes detached:false on Windows", async () => {
+    // Note: the helper always sets `detached`. On POSIX it's true, on Windows
+    // it's false. The test name reflects the assertion, not an "omitted" key.
     const { spawnInGroup } = await import("../src/process-group.js");
     spawnInGroup("cmd", ["/c", "echo hi"], { stdio: "ignore" });
     expect(lastSpawnArgs).not.toBeNull();
@@ -171,7 +244,15 @@ describe("process-group helpers (Windows simulated)", () => {
     (cp.kill as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error("kill failed");
     });
-    expect(() => killGroup(cp, "SIGTERM")).not.toThrow();
-    expect(killGroup(cp, "SIGTERM")).toBe(false);
+    // Stub stderr so the (expected) unexpected-error log doesn't pollute test output.
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(() => killGroup(cp, "SIGTERM")).not.toThrow();
+      expect(killGroup(cp, "SIGTERM")).toBe(false);
+      // Non-ESRCH errors are logged on Windows just as on POSIX.
+      expect(stderrSpy).toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 });
