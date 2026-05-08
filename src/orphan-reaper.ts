@@ -41,6 +41,19 @@ export interface ReapOpts {
   forceKillDelayMs?: number;
   /** Override for tests. Defaults to `process.platform`. */
   platform?: NodeJS.Platform;
+  /**
+   * PIDs that the kernel may reparent our orphans to. Defaults to {1} ∪
+   * (root-owned ancestors of process.pid on Linux). Override for tests or
+   * environments where automatic discovery is wrong.
+   *
+   * Why this is not just {1}: since Linux 2.6.36 a process can register as
+   * a "child subreaper" via prctl(PR_SET_CHILD_SUBREAPER); the kernel then
+   * reparents orphaned descendants of that process to the subreaper instead
+   * of PID 1. WSL2's per-namespace `/init`, systemd-user, container
+   * runtimes, and some shells all do this. So orphans can land at any
+   * subreaper above us — not just PID 1.
+   */
+  subreaperPids?: ReadonlySet<number>;
 }
 
 export interface ReapResult {
@@ -76,6 +89,61 @@ function matchesSignature(cmdline: string, signature: readonly string[]): boolea
   return cmdline.includes(signature.join(" "));
 }
 
+/**
+ * Walk our own ancestor chain on Linux and collect PIDs whose owner UID is 0
+ * (root). Those are the candidates the kernel may have reparented our orphans
+ * to via the subreaper mechanism. PID 1 is always added.
+ *
+ * Non-root ancestors (user shell, the host that spawned us) are deliberately
+ * skipped: orphans can't be reparented to them by definition (they're not
+ * subreapers of root processes), and including them would risk killing
+ * sibling MCP-server warm-pool members spawned by the same shell.
+ *
+ * Returns a set with `1` always present; on non-Linux returns just `{1}`.
+ */
+function findLinuxSubreaperAncestors(): Set<number> {
+  const result = new Set<number>([1]);
+  if (process.platform !== "linux") return result;
+
+  let cursor = process.pid;
+  // Bounded by the depth of any plausible Linux process tree; the guard is
+  // belt-and-suspenders against /proc returning a stale or malformed PPID.
+  for (let i = 0; i < 64; i++) {
+    let parent: number;
+    let parentUid: number;
+    try {
+      const stat = readFileSync(`/proc/${cursor}/stat`, "utf8");
+      const lastParen = stat.lastIndexOf(")");
+      if (lastParen < 0) break;
+      const after = stat.slice(lastParen + 1).trim().split(/\s+/);
+      parent = Number.parseInt(after[1] ?? "", 10);
+      if (!Number.isFinite(parent) || parent <= 1) {
+        if (parent === 1) result.add(1);
+        break;
+      }
+      const status = readFileSync(`/proc/${parent}/status`, "utf8");
+      const m = /^Uid:\s+(\d+)/m.exec(status);
+      parentUid = m ? Number.parseInt(m[1] ?? "", 10) : NaN;
+    } catch {
+      break;
+    }
+    if (parentUid === 0) result.add(parent);
+    cursor = parent;
+  }
+  return result;
+}
+
+let _subreaperCache: Set<number> | null = null;
+function getDefaultSubreaperPids(): ReadonlySet<number> {
+  if (_subreaperCache === null) _subreaperCache = findLinuxSubreaperAncestors();
+  return _subreaperCache;
+}
+
+/** @internal Test-only: clear the cached subreaper set so the next call re-walks /proc. */
+export function _resetSubreaperCacheForTest(): void {
+  _subreaperCache = null;
+}
+
 export async function reapOrphans(opts: ReapOpts): Promise<ReapResult> {
   const platform = opts.platform ?? process.platform;
   const list = opts.listProcesses ?? defaultListProcesses(platform);
@@ -94,11 +162,15 @@ export async function reapOrphans(opts: ReapOpts): Promise<ReapResult> {
     return { reaped: 0, failed: 0 };
   }
 
-  // Filter — strict PPID==1 + UID + cmdline + catastrophic-kill guard.
+  // Filter — PPID is in the subreaper set (PID 1 + root-owned ancestors of us)
+  // + UID + cmdline + catastrophic-kill guard. The strict subreaper-set check
+  // is what makes module-load fire-and-forget safe: our own newborn pool
+  // members have PPID == our PID, never one of our root-owned ancestors.
+  const subreaperPids = opts.subreaperPids ?? getDefaultSubreaperPids();
   const matches = candidates.filter(
     (p) =>
       p.pid > 1 &&
-      p.ppid === 1 &&
+      subreaperPids.has(p.ppid) &&
       p.uid === myUid &&
       matchesSignature(p.cmdline, opts.signature),
   );

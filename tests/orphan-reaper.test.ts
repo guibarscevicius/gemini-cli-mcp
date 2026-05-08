@@ -254,6 +254,70 @@ describe("reapOrphans (business logic)", () => {
     });
     expect(result).toEqual({ reaped: 0, failed: 0 });
   });
+
+  it("reaps orphans whose PPID is a subreaper ancestor (e.g. WSL2 /init), not just PID 1", async () => {
+    // WSL2 (and systemd-user / containers) install per-namespace subreapers
+    // via prctl(PR_SET_CHILD_SUBREAPER). Orphans get reparented to the
+    // nearest subreaper, NOT PID 1. Discovered during integration testing
+    // on WSL2 where orphans landed at PID 748339 (the user-namespace init).
+    const { reapOrphans } = await import("../src/orphan-reaper.js");
+    const killSpy = vi.fn(() => true);
+    const result = await reapOrphans({
+      signature: ["--yolo"],
+      // Caller injects the discovered subreaper set; in production this is
+      // computed by walking /proc/self's parent chain for root-owned PIDs.
+      subreaperPids: new Set<number>([1, 748339, 748338]),
+      listProcesses: async () => [
+        { pid: 875306, ppid: 748339, uid: 1000, cmdline: "node gemini --yolo", ageSeconds: 30 },
+      ],
+      getuid: () => 1000,
+      kill: killSpy,
+      forceKillDelayMs: 0,
+    });
+    expect(result.reaped).toBe(1);
+    expect(killSpy).toHaveBeenCalledWith(875306, "SIGTERM");
+  });
+
+  it("does NOT reap a process whose PPID is a non-subreaper ancestor (sibling MCP server safety)", async () => {
+    // A second MCP server's warm-pool members have PPID == that-MCP's PID,
+    // which is user-owned (not root-owned), so it's NOT in the subreaper set.
+    // The filter must spare them.
+    const { reapOrphans } = await import("../src/orphan-reaper.js");
+    const killSpy = vi.fn(() => true);
+    const result = await reapOrphans({
+      signature: ["--yolo"],
+      subreaperPids: new Set<number>([1, 748339]), // only root-owned ancestors
+      listProcesses: async () => [
+        // PPID 858414 is some live user-owned process (e.g., another MCP server)
+        { pid: 999999, ppid: 858414, uid: 1000, cmdline: "gemini --yolo", ageSeconds: 5 },
+      ],
+      getuid: () => 1000,
+      kill: killSpy,
+      forceKillDelayMs: 0,
+    });
+    expect(result).toEqual({ reaped: 0, failed: 0 });
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("default subreaperPids set always contains PID 1 (regression guard for non-WSL2 systems)", async () => {
+    // On bare Linux without subreapers, orphans go to PID 1. The default
+    // subreaper-set discovery must always seed {1}, otherwise we'd miss
+    // every orphan on a vanilla system.
+    const { reapOrphans } = await import("../src/orphan-reaper.js");
+    const killSpy = vi.fn(() => true);
+    const result = await reapOrphans({
+      signature: ["--yolo"],
+      // No explicit subreaperPids — fall through to platform default.
+      listProcesses: async () => [
+        { pid: 1234, ppid: 1, uid: 1000, cmdline: "gemini --yolo", ageSeconds: 60 },
+      ],
+      getuid: () => 1000,
+      kill: killSpy,
+      forceKillDelayMs: 0,
+    });
+    expect(result.reaped).toBe(1);
+    expect(killSpy).toHaveBeenCalledWith(1234, "SIGTERM");
+  });
 });
 
 // ── listLinuxProcesses adapter (mocked /proc) ────────────────────────────────
