@@ -30,6 +30,7 @@ Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed rel
 4. `gemini-cancel` — start a job, cancel it, verify status becomes `cancelled`
 5. `@file` reference in prompt — verifies file expansion end-to-end (use a file in `src/`)
 6. Two concurrent `ask-gemini` calls — verifies semaphore and warm pool under load
+7. Idle eviction (PR #112) — start with `GEMINI_POOL_SIZE=2 GEMINI_POOL_IDLE_TIMEOUT_MS=15000 GEMINI_POOL_MIN_SIZE=0`. Run `pgrep -af "gemini --yolo"`: 2 workers → 0 after 20 s idle → 1 after a fresh `ask-gemini` call → second call within 15 s hits warm. Verifies the eviction + replenishment loop end-to-end.
 
 **After a PR adds new features**, add the relevant scenario(s) to the list above and to the PR test plan.
 

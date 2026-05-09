@@ -1,7 +1,7 @@
 # Warm pool isolation across MCP server instances
 
 **Date:** 2026-05-09
-**Status:** Findings — issues filed (#110 phase 1, #111 phase 2)
+**Status:** Findings — both phases bundled in PR [#112](https://github.com/guibarscevicius/gemini-cli-mcp/pull/112) (closes #110 + #111)
 **Triggered by:** "we launch one warmup per claude code / codex instance ... check if this should be one process only, or if it already reuses the processing across claude code / codex / mcp instances"
 
 ## TL;DR
