@@ -13,11 +13,14 @@ jobs:
   check-upstream:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Get latest upstream version
         id: upstream
         run: |
+          set -eo pipefail
+          # 2>/dev/null suppresses npm's verbose error block on network failure;
+          # the empty-string guard below is the user-visible failure path.
           LATEST=$(npm view @google/gemini-cli version 2>/dev/null || echo "")
           if [ -z "$LATEST" ]; then
             echo "::error::Failed to fetch upstream version"
@@ -28,7 +31,10 @@ jobs:
       - name: Compare with tracked version
         id: compare
         run: |
-          TRACKED=$(cat .github/upstream-version.txt | tr -d '[:space:]')
+          set -eo pipefail
+          # tr < file (not cat | tr) so a missing version file fails loudly
+          # instead of silently producing TRACKED="" and a false-positive drift.
+          TRACKED=$(tr -d '[:space:]' < .github/upstream-version.txt)
           LATEST="${{ steps.upstream.outputs.version }}"
           echo "tracked=$TRACKED" >> "$GITHUB_OUTPUT"
           echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
@@ -45,9 +51,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LATEST: ${{ steps.compare.outputs.latest }}
         run: |
+          set -eo pipefail
+          # `gh --jq` accepts only one expression argument; --arg is a jq-binary
+          # flag, not a gh flag. Pipe the JSON to standalone jq instead so we
+          # can use --arg safely without shell-quoting the version inline.
+          # pipefail (above) ensures a gh failure (auth/rate limit) is not
+          # masked by jq's exit code.
           COUNT=$(gh issue list --label upstream-update --state open --json title \
-            --jq --arg latest "$LATEST" \
-            '[.[] | select(.title == "upstream: gemini-cli \($latest) released" or (.title | startswith("upstream: gemini-cli \($latest) ")))] | length')
+            | jq --arg latest "$LATEST" \
+                '[.[] | select(.title == "upstream: gemini-cli \($latest) released" or (.title | startswith("upstream: gemini-cli \($latest) ")))] | length')
           echo "exists=$([ "$COUNT" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Create tracking issue

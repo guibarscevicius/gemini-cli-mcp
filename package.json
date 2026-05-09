@@ -17,6 +17,7 @@
     "lint": "eslint src",
     "test": "vitest run",
     "test:smoke": "node scripts/mcp-smoke.mjs",
+    "verify:pool": "node scripts/verify-pool.mjs",
     "test:watch": "vitest",
     "prepare": "npm run build"
   },
