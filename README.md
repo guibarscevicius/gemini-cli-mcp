@@ -4,7 +4,30 @@
 [![CI](https://github.com/guibarscevicius/gemini-cli-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/guibarscevicius/gemini-cli-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An MCP server that wraps the official [`@google/gemini-cli`](https://github.com/google-gemini/gemini-cli), exposing Gemini to Claude Code and any MCP-compatible host. Supports stateful multi-turn sessions, async jobs, response streaming, and a warm process pool for low-latency responses.
+Use Gemini's free tier as an on-demand code reviewer from inside Claude Code, Codex, or any MCP-compatible host. `gemini-cli-mcp` wraps the official [`@google/gemini-cli`](https://github.com/google-gemini/gemini-cli) and exposes it through the Model Context Protocol — so you can ask Gemini to second-opinion a diff, pair-review a refactor, or scan a long file without leaving your primary agent.
+
+Stateful multi-turn sessions, async jobs, response streaming, and a warm process pool keep latency low enough to be worth using.
+
+## Why I built this
+
+I use Claude Code and Codex daily for real work, and I have free Gemini access through my employer. Gemini is genuinely good at long-context reading and at noticing things a different model would miss — but switching tabs to ask it costs flow.
+
+So I made it a tool call. Now my primary agent can hand Gemini a diff, a directory, or a question and keep going. It's not a replacement for either model — it's a cheap second opinion, on demand, in the same loop.
+
+The interesting engineering is the boring stuff: warm process pools so the 12-second cold start doesn't stall the agent, SQLite-backed sessions so multi-turn actually works, and a workspace-scoped `@file` expander so you can hand Gemini a whole subdirectory in one prompt.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Claude Code / Codex<br/>or any MCP host] -->|MCP tool call| B[gemini-cli-mcp]
+    B <-->|read/write turns| D[(SQLite<br/>session store)]
+    B -->|borrow worker| C[Warm process pool]
+    C -->|stream-json over stdio| E[gemini CLI subprocess]
+    E -->|HTTPS| F[Google Gemini API]
+```
+
+The MCP server keeps a small pool of pre-spawned `gemini` CLI processes hot, so the first request after server start typically responds in 4–5 s instead of the 12 s a cold spawn would take. Multi-turn history is stored in SQLite (`node:sqlite`, no native deps) and replayed as structured context on every `gemini-reply`.
 
 ## Quick Setup (recommended)
 
@@ -371,6 +394,13 @@ const { response } = await gemini_reply({
 The server pre-spawns Gemini CLI processes (warm pool) to eliminate the ~12 s cold-start cost. First requests arrive in ~4–5 s once the pool has warmed up (~12 s after server start).
 
 Set `GEMINI_POOL_STARTUP_MS` to match your machine's CLI startup time. Disable the pool with `GEMINI_POOL_ENABLED=0` for debugging.
+
+## Limitations
+
+- **Free-tier rate limits apply** — Google's quotas govern, not this server. Heavy parallel workloads (`gemini-batch` with many prompts) will hit them; tune `GEMINI_MAX_CONCURRENT` accordingly.
+- **Cold-start latency on first request** — the first prompt after server start waits up to ~12 s for a warm-pool slot. Subsequent requests are ~4–5 s.
+- **No streaming pass-through to the host** — responses are accumulated and returned whole. Async jobs let you poll for partial output, but there's no token-by-token stream into Claude Code/Codex (the MCP spec doesn't expose one yet).
+- **Requires an authenticated `gemini` CLI on the same machine** — the server shells out to the official CLI, so OAuth state lives in `~/.config/gemini`. This is not a remote API client; if you need that, talk to the Gemini API directly.
 
 ## Environment variables
 
