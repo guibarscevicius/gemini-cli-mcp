@@ -22,5 +22,9 @@ scratch/
 # Internal development notes (test plans, session logs, personal paths)
 tasks/
 
+# Personal planning & research notes (per-author scratchpads, not team-shared)
+docs/plans/
+docs/research/
+
 # Local autonomous-save / remember tool state (per-machine logs and PID file)
 .remember/
