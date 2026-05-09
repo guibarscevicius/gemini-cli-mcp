@@ -516,23 +516,32 @@ describe("WarmProcessPool", () => {
     const start = Date.now();
     vi.setSystemTime(start);
 
+    // idleTimeoutMs=10_000 → eviction interval ticks at start+10s, +20s, +30s.
     const pool = new WarmProcessPool(2, [], {}, 0, "gemini", 10_000, 0);
 
-    // Advance 9s — under the 10s threshold.
+    // Advance 9 s — under the threshold; no tick has fired yet.
     vi.setSystemTime(start + 9_000);
     await vi.advanceTimersByTimeAsync(9_000);
     expect(pool.readyCount).toBe(2);
 
-    // acquire() resets lastAcquireAt to "now".
+    // First reset: lastAcquireAt becomes start+9_000.
     await pool.acquire();
 
-    // Advance another 9s — total elapsed is 18s, but no contiguous 10s idle.
-    // Eviction tick at 20s (next interval) sees lastAcquireAt == start+9000,
-    // so 20000 - 9000 = 11000 ≥ 10000 → eviction would fire. We need to
-    // verify that BEFORE the next tick at start+20000 (i.e. at start+18000),
-    // no eviction has happened yet.
-    vi.setSystemTime(start + 18_000);
-    await vi.advanceTimersByTimeAsync(9_000);
+    // Cross the first interval tick at start+10_000. Inside the eviction loop,
+    // Date.now() - lastAcquireAt = 1_000 < 10_000 → no eviction. The whole
+    // point of the reset: an acquire that occurred recently buys idleTimeoutMs
+    // of fresh runway against the very next tick.
+    vi.setSystemTime(start + 15_000);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(processKillSpy).not.toHaveBeenCalled();
+
+    // Second reset BEFORE the next tick at start+20_000. The reset is
+    // sticky-to-most-recent-acquire: at the start+20_000 tick, elapsed since
+    // this acquire is 5_000 < 10_000 → still no eviction. Without the reset
+    // the tick at +20_000 would see 20_000-9_000=11_000 and fire.
+    await pool.acquire();
+    vi.setSystemTime(start + 25_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(processKillSpy).not.toHaveBeenCalled();
 
     vi.useRealTimers();

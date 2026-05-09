@@ -107,30 +107,34 @@ const semaphore = new Semaphore(MAX_CONCURRENT);
 //                                must be ≤ GEMINI_POOL_SIZE)
 const POOL_ENABLED = (process.env.GEMINI_POOL_ENABLED ?? "1") !== "0";
 const POOL_SIZE = parseInt(process.env.GEMINI_POOL_SIZE ?? "1", 10);
-if (!Number.isFinite(POOL_SIZE) || POOL_SIZE < 1) {
-  throw new Error(
-    `GEMINI_POOL_SIZE must be a positive integer, got "${process.env.GEMINI_POOL_SIZE}". ` +
-      "Use 1 (default) for minimal footprint, or a larger value combined with idle eviction."
-  );
-}
 const POOL_STARTUP_MS = parseInt(process.env.GEMINI_POOL_STARTUP_MS ?? "12000", 10);
 const POOL_IDLE_TIMEOUT_MS = parseInt(process.env.GEMINI_POOL_IDLE_TIMEOUT_MS ?? "300000", 10);
-if (!Number.isFinite(POOL_IDLE_TIMEOUT_MS) || POOL_IDLE_TIMEOUT_MS < 0) {
-  throw new Error(
-    `GEMINI_POOL_IDLE_TIMEOUT_MS must be a non-negative integer, got "${process.env.GEMINI_POOL_IDLE_TIMEOUT_MS}". ` +
-      "Use 0 to disable idle eviction or a positive value (ms) to enable."
-  );
-}
 const POOL_MIN_SIZE = parseInt(process.env.GEMINI_POOL_MIN_SIZE ?? "0", 10);
-if (!Number.isFinite(POOL_MIN_SIZE) || POOL_MIN_SIZE < 0) {
-  throw new Error(
-    `GEMINI_POOL_MIN_SIZE must be a non-negative integer, got "${process.env.GEMINI_POOL_MIN_SIZE}".`
-  );
-}
-if (POOL_MIN_SIZE > POOL_SIZE) {
-  throw new Error(
-    `GEMINI_POOL_MIN_SIZE (${POOL_MIN_SIZE}) cannot exceed GEMINI_POOL_SIZE (${POOL_SIZE}).`
-  );
+// Validate pool config only when the pool is enabled — disabled-pool users with
+// stale/invalid GEMINI_POOL_* env vars must not crash the server.
+if (POOL_ENABLED) {
+  if (!Number.isFinite(POOL_SIZE) || POOL_SIZE < 1) {
+    throw new Error(
+      `GEMINI_POOL_SIZE must be a positive integer, got "${process.env.GEMINI_POOL_SIZE}". ` +
+        "Use 1 (default) for minimal footprint, or a larger value combined with idle eviction."
+    );
+  }
+  if (!Number.isFinite(POOL_IDLE_TIMEOUT_MS) || POOL_IDLE_TIMEOUT_MS < 0) {
+    throw new Error(
+      `GEMINI_POOL_IDLE_TIMEOUT_MS must be a non-negative integer, got "${process.env.GEMINI_POOL_IDLE_TIMEOUT_MS}". ` +
+        "Use 0 to disable idle eviction or a positive value (ms) to enable."
+    );
+  }
+  if (!Number.isFinite(POOL_MIN_SIZE) || POOL_MIN_SIZE < 0) {
+    throw new Error(
+      `GEMINI_POOL_MIN_SIZE must be a non-negative integer, got "${process.env.GEMINI_POOL_MIN_SIZE}".`
+    );
+  }
+  if (POOL_MIN_SIZE > POOL_SIZE) {
+    throw new Error(
+      `GEMINI_POOL_MIN_SIZE (${POOL_MIN_SIZE}) cannot exceed GEMINI_POOL_SIZE (${POOL_SIZE}).`
+    );
+  }
 }
 
 function readdirSafe(dir: string): string[] {
@@ -308,12 +312,13 @@ export function getEnvOverrides(): Record<string, unknown> {
   if (process.env.GEMINI_POOL_ENABLED !== undefined && POOL_ENABLED !== true) {
     overrides.GEMINI_POOL_ENABLED = POOL_ENABLED;
   }
-  if (process.env.GEMINI_POOL_SIZE !== undefined) {
-    const effectivePoolSize = Number.isFinite(POOL_SIZE) && POOL_SIZE >= 1 ? POOL_SIZE : MAX_CONCURRENT;
-    if (effectivePoolSize !== MAX_CONCURRENT) {
-      overrides.GEMINI_POOL_SIZE = effectivePoolSize;
-    }
+  if (process.env.GEMINI_POOL_SIZE !== undefined && POOL_SIZE !== 1) {
+    overrides.GEMINI_POOL_SIZE = POOL_SIZE;
   }
+  const poolIdleTimeoutOverride = parseIntOverride("GEMINI_POOL_IDLE_TIMEOUT_MS", 300000);
+  if (poolIdleTimeoutOverride !== undefined) overrides.GEMINI_POOL_IDLE_TIMEOUT_MS = poolIdleTimeoutOverride;
+  const poolMinSizeOverride = parseIntOverride("GEMINI_POOL_MIN_SIZE", 0);
+  if (poolMinSizeOverride !== undefined) overrides.GEMINI_POOL_MIN_SIZE = poolMinSizeOverride;
   const poolStartupOverride = parseIntOverride("GEMINI_POOL_STARTUP_MS", 12000);
   if (poolStartupOverride !== undefined) overrides.GEMINI_POOL_STARTUP_MS = poolStartupOverride;
 

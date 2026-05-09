@@ -245,16 +245,23 @@ export class WarmProcessPool {
    * Evict ready processes down to `minSize` if the pool has been idle for at
    * least `idleTimeoutMs`. Called by the idle-check interval.
    *
-   * `evicting` is set during the kill loop so the per-process `exit` listener
-   * (which would otherwise spawn a replacement at the bottom of `_spawnAndEnqueue`)
-   * stays quiet — without it the killed worker's exit event would race the
-   * eviction loop and respawn what we just killed.
+   * The eviction loop is fully synchronous. Two layers of defense prevent the
+   * killed workers from being respawned:
+   *  1. Primary: `ready.shift()` removes the entry BEFORE `killGroup`, so when
+   *     the async `exit` event fires later, `onExitOrError` finds `idx === -1`
+   *     and skips its replenishment branch.
+   *  2. Secondary: the `evicting` flag suppresses the spawn that `acquire()`
+   *     would otherwise trigger on an empty pool — without it, an `acquire()`
+   *     racing the kill loop would immediately respawn what we just removed.
+   * The flag is set/cleared inside `try/finally` so an exception in `killGroup`
+   * cannot leave the pool stuck in `evicting === true`.
    */
   private _evictIfIdle(): void {
     if (this.draining) return;
     if (Date.now() - this.lastAcquireAt < this.idleTimeoutMs) return;
     if (this.ready.length <= this.minSize) return;
 
+    const before = this.ready.length;
     this.evicting = true;
     try {
       while (this.ready.length > this.minSize) {
@@ -267,6 +274,12 @@ export class WarmProcessPool {
     } finally {
       this.evicting = false;
     }
+    mcpLog("info", "pool", {
+      event: "idle_eviction",
+      evicted: before - this.ready.length,
+      remaining: this.ready.length,
+      idleMs: Date.now() - this.lastAcquireAt,
+    });
   }
 
   /** Kill all ready processes and reject all pending waiters (graceful shutdown). */

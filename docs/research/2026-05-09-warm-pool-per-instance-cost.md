@@ -66,8 +66,12 @@ warm workers = N_clients × M_entries × GEMINI_POOL_SIZE
              ≈ (open Claude Code windows) × (gemini-cli-mcp configs) × pool_size
 ```
 
-Today's defaults: `GEMINI_POOL_SIZE = GEMINI_MAX_CONCURRENT = 2`.
+Pre-PR defaults (snapshot at time of writing): `GEMINI_POOL_SIZE = GEMINI_MAX_CONCURRENT = 2`.
 With 5 active Claude Code sessions and one MCP entry: **10 workers, ~2.5–4 GB RAM**.
+
+> **Update — PR #112 merged:** the new default is `GEMINI_POOL_SIZE = 1` with idle eviction enabled
+> (`GEMINI_POOL_IDLE_TIMEOUT_MS = 300000`, `GEMINI_POOL_MIN_SIZE = 0`). Same scenario now: **5 workers
+> active under load, drops to 0 after 5 min idle.**
 
 ### Sub-options for the "bound cost" PR
 
