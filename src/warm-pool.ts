@@ -49,33 +49,57 @@ export class WarmProcessPool {
   private readonly ready: ReadyEntry[] = [];
   private readonly waiters: Waiter[] = [];
   private draining = false;
+  private evicting = false;
   private consecutiveSpawnFailures = 0;
   private lastSpawnError: string | null = null;
+  private lastAcquireAt: number = Date.now();
+  private idleTimer: ReturnType<typeof setInterval> | null = null;
   private static readonly MAX_CONSECUTIVE_FAILURES = 5;
 
   /**
-   * @param poolSize   Number of processes to keep warm (default: GEMINI_MAX_CONCURRENT).
-   * @param baseArgs   Args to pass to every spawned `gemini` process (no --prompt).
-   * @param env        Restricted env for the subprocess (HOME + PATH).
-   * @param startupMs  Estimated CLI startup time (ms).  Prompt writes are delayed until
-   *                   this many ms after spawn, so the CLI is ready to process input.
-   *                   Defaults to 0 (no delay) — production code passes the env-configured value.
+   * @param poolSize       Number of processes to keep warm.
+   * @param baseArgs       Args to pass to every spawned `gemini` process (no --prompt).
+   * @param env            Restricted env for the subprocess (HOME + PATH).
+   * @param startupMs      Estimated CLI startup time (ms).  Prompt writes are delayed until
+   *                       this many ms after spawn, so the CLI is ready to process input.
+   *                       Defaults to 0 (no delay) — production code passes the env-configured value.
+   * @param binary         Path to the `gemini` binary (default: "gemini" via PATH).
+   * @param idleTimeoutMs  After this many ms with no acquire(), the pool shrinks to `minSize`.
+   *                       Defaults to 0 (eviction disabled).
+   * @param minSize        Floor the pool can shrink to during idle eviction. Must be ≤ `poolSize`.
+   *                       Defaults to 0 (full eviction when idle).
    */
   constructor(
     private readonly poolSize: number,
     private readonly baseArgs: string[],
     private readonly env: Record<string, string>,
     private readonly startupMs: number = 0,
-    private readonly binary: string = "gemini"
+    private readonly binary: string = "gemini",
+    private readonly idleTimeoutMs: number = 0,
+    private readonly minSize: number = 0
   ) {
+    if (this.minSize < 0 || this.idleTimeoutMs < 0) {
+      throw new Error("WarmProcessPool: minSize and idleTimeoutMs must be non-negative");
+    }
+    if (this.minSize > this.poolSize) {
+      throw new Error(
+        `WarmProcessPool: minSize (${this.minSize}) cannot exceed poolSize (${this.poolSize})`
+      );
+    }
     for (let i = 0; i < poolSize; i++) {
       this._spawnAndEnqueue();
+    }
+    if (this.idleTimeoutMs > 0) {
+      this.idleTimer = setInterval(() => this._evictIfIdle(), this.idleTimeoutMs);
+      // Don't keep the event loop alive solely for eviction checks — the
+      // server's other timers (job GC, session-store etc.) anchor the loop.
+      this.idleTimer.unref?.();
     }
   }
 
   /** Spawn one warm process and either give it to a waiting caller or enqueue it. */
   private _spawnAndEnqueue(): void {
-    if (this.draining) return;
+    if (this.draining || this.evicting) return;
 
     const cp = spawnInGroup(this.binary, this.baseArgs, {
       env: this.env,
@@ -176,6 +200,8 @@ export class WarmProcessPool {
       return Promise.reject(new Error("Gemini process pool is shutting down"));
     }
 
+    this.lastAcquireAt = Date.now();
+
     if (this.ready.length > 0) {
       const { wp, keepAliveInterval } = this.ready.shift()!;
       clearInterval(keepAliveInterval);
@@ -201,12 +227,69 @@ export class WarmProcessPool {
         }, timeoutMs);
       }
       this.waiters.push(waiter);
+
+      // Pool is empty (idle eviction shrank below 1, or every slot is in flight
+      // and no spawn is queued). Trigger a spawn now — `_spawnAndEnqueue`
+      // checks the waiter queue at the end of its body and hands the new
+      // process directly to the waiter we just pushed.
+      //
+      // Skip when poolSize is 0 (a deliberately empty pool, used in tests for
+      // the timeout/drain rejection paths). A zero-size pool never spawns.
+      if (!this.draining && !this.evicting && this.poolSize > 0) {
+        this._spawnAndEnqueue();
+      }
+    });
+  }
+
+  /**
+   * Evict ready processes down to `minSize` if the pool has been idle for at
+   * least `idleTimeoutMs`. Called by the idle-check interval.
+   *
+   * The eviction loop is fully synchronous. Two layers of defense prevent the
+   * killed workers from being respawned:
+   *  1. Primary: `ready.shift()` removes the entry BEFORE `killGroup`, so when
+   *     the async `exit` event fires later, `onExitOrError` finds `idx === -1`
+   *     and skips its replenishment branch.
+   *  2. Secondary: the `evicting` flag suppresses the spawn that `acquire()`
+   *     would otherwise trigger on an empty pool — without it, an `acquire()`
+   *     racing the kill loop would immediately respawn what we just removed.
+   * The flag is set/cleared inside `try/finally` so an exception in `killGroup`
+   * cannot leave the pool stuck in `evicting === true`.
+   */
+  private _evictIfIdle(): void {
+    if (this.draining) return;
+    if (Date.now() - this.lastAcquireAt < this.idleTimeoutMs) return;
+    if (this.ready.length <= this.minSize) return;
+
+    const before = this.ready.length;
+    this.evicting = true;
+    try {
+      while (this.ready.length > this.minSize) {
+        const entry = this.ready.shift()!;
+        clearInterval(entry.keepAliveInterval);
+        if (entry.wp.cp.exitCode === null) {
+          killGroup(entry.wp.cp, "SIGTERM");
+        }
+      }
+    } finally {
+      this.evicting = false;
+    }
+    mcpLog("info", "pool", {
+      event: "idle_eviction",
+      evicted: before - this.ready.length,
+      remaining: this.ready.length,
+      idleMs: Date.now() - this.lastAcquireAt,
     });
   }
 
   /** Kill all ready processes and reject all pending waiters (graceful shutdown). */
   async drain(): Promise<void> {
     this.draining = true;
+
+    if (this.idleTimer !== null) {
+      clearInterval(this.idleTimer);
+      this.idleTimer = null;
+    }
 
     // Reject all pending waiters immediately.
     for (const waiter of this.waiters) {

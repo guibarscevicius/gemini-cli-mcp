@@ -449,6 +449,158 @@ describe("WarmProcessPool", () => {
     expect(wp.readyAt).toBeGreaterThan(Date.now() + 4000);
   });
 
+  // ── idle eviction (#111) ─────────────────────────────────────────────────
+
+  it("evicts ready processes down to minSize after idleTimeoutMs", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    vi.setSystemTime(start);
+
+    // poolSize 3, minSize 1, idle timeout 10s
+    const pool = new WarmProcessPool(3, [], {}, 0, "gemini", 10_000, 1);
+    expect(pool.readyCount).toBe(3);
+    const initialPids = spawnCalls.slice(0, 3).map((c) => c.pid!);
+
+    // Advance past idle timeout — eviction tick fires, kills 2 of 3 processes.
+    vi.setSystemTime(start + 11_000);
+    await vi.advanceTimersByTimeAsync(11_000);
+
+    expect(pool.readyCount).toBe(1);
+    // The two evicted processes received SIGTERM via group-kill (negative pid).
+    const evictedPids = initialPids.slice(0, 2);
+    for (const pid of evictedPids) {
+      expect(processKillSpy).toHaveBeenCalledWith(-pid, "SIGTERM");
+    }
+
+    vi.useRealTimers();
+  });
+
+  it("does not evict within the idle timeout window", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    vi.setSystemTime(start);
+
+    const pool = new WarmProcessPool(3, [], {}, 0, "gemini", 10_000, 0);
+    expect(pool.readyCount).toBe(3);
+
+    // Advance only halfway — eviction must not fire.
+    vi.setSystemTime(start + 5_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(pool.readyCount).toBe(3);
+    expect(processKillSpy).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("does not evict when idleTimeoutMs is 0", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    vi.setSystemTime(start);
+
+    // idleTimeoutMs=0 disables eviction entirely.
+    const pool = new WarmProcessPool(2, [], {}, 0, "gemini", 0, 0);
+    expect(pool.readyCount).toBe(2);
+
+    vi.setSystemTime(start + 60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(pool.readyCount).toBe(2);
+    expect(processKillSpy).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("acquire() resets the idle window so eviction does not fire", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    vi.setSystemTime(start);
+
+    // idleTimeoutMs=10_000 → eviction interval ticks at start+10s, +20s, +30s.
+    const pool = new WarmProcessPool(2, [], {}, 0, "gemini", 10_000, 0);
+
+    // Advance 9 s — under the threshold; no tick has fired yet.
+    vi.setSystemTime(start + 9_000);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(pool.readyCount).toBe(2);
+
+    // First reset: lastAcquireAt becomes start+9_000.
+    await pool.acquire();
+
+    // Cross the first interval tick at start+10_000. Inside the eviction loop,
+    // Date.now() - lastAcquireAt = 1_000 < 10_000 → no eviction. The whole
+    // point of the reset: an acquire that occurred recently buys idleTimeoutMs
+    // of fresh runway against the very next tick.
+    vi.setSystemTime(start + 15_000);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(processKillSpy).not.toHaveBeenCalled();
+
+    // Second reset BEFORE the next tick at start+20_000. The reset is
+    // sticky-to-most-recent-acquire: at the start+20_000 tick, elapsed since
+    // this acquire is 5_000 < 10_000 → still no eviction. Without the reset
+    // the tick at +20_000 would see 20_000-9_000=11_000 and fire.
+    await pool.acquire();
+    vi.setSystemTime(start + 25_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(processKillSpy).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("spawns a fresh process for waiters when the pool was emptied by eviction", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    vi.setSystemTime(start);
+
+    const pool = new WarmProcessPool(2, [], {}, 0, "gemini", 5_000, 0);
+    const initialSpawnCount = spawnCalls.length;
+    expect(initialSpawnCount).toBe(2);
+
+    // Drain the pool via idle eviction.
+    vi.setSystemTime(start + 6_000);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(pool.readyCount).toBe(0);
+
+    // acquire() on an empty pool must trigger a fresh spawn that resolves the waiter.
+    const acquirePromise = pool.acquire();
+    // The synchronous body of acquire pushed a waiter and triggered a spawn;
+    // _spawnAndEnqueue's post-spawn handoff resolves the waiter immediately.
+    const wp = await acquirePromise;
+    expect(wp).toBeDefined();
+    expect(spawnCalls.length).toBeGreaterThan(initialSpawnCount);
+
+    vi.useRealTimers();
+  });
+
+  it("drain() clears the idle eviction timer (no leaks)", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    vi.setSystemTime(start);
+
+    const pool = new WarmProcessPool(2, [], {}, 0, "gemini", 10_000, 0);
+    await pool.drain();
+    processKillSpy?.mockClear();
+
+    // After drain, advance well past what would have triggered eviction —
+    // no further process.kill calls (interval was cleared).
+    vi.setSystemTime(start + 60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(processKillSpy).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("constructor rejects minSize > poolSize", () => {
+    expect(() => new WarmProcessPool(2, [], {}, 0, "gemini", 1_000, 5)).toThrow(
+      /minSize.*cannot exceed poolSize/i
+    );
+  });
+
+  it("constructor rejects negative idleTimeoutMs or minSize", () => {
+    expect(() => new WarmProcessPool(2, [], {}, 0, "gemini", -1, 0)).toThrow();
+    expect(() => new WarmProcessPool(2, [], {}, 0, "gemini", 0, -1)).toThrow();
+  });
+
   // ── concurrent waiters ────────────────────────────────────────────────────
 
   // Note: this tests sequential acquire() ordering (ready-queue FIFO), not

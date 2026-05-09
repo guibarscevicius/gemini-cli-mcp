@@ -83,7 +83,7 @@ beforeEach(() => {
   mockGeminiCancel.mockResolvedValue({ cancelled: true, alreadyDone: false });
   mockGeminiHealth.mockResolvedValue({
     binary: { path: "/usr/local/bin/gemini" },
-    pool: { enabled: true, ready: 1, size: 2 },
+    pool: { enabled: true, ready: 1, size: 1 },
     concurrency: { max: 2, active: 0, queued: 0 },
     jobs: { active: 0, total: 0 },
     sessions: { total: 0 },

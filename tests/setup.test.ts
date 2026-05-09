@@ -79,7 +79,7 @@ describe("runServerSelfTest", () => {
 
     const healthPayload = {
       binary: { path: "/usr/bin/gemini" },
-      pool: { ready: 1, size: 2 },
+      pool: { ready: 1, size: 1 },
       server: { version: "1.0.0" },
     };
     mockSelfTestSpawn(
@@ -95,7 +95,7 @@ describe("runServerSelfTest", () => {
     await expect(runServerSelfTest("/tmp/server.js", "/usr/bin/gemini")).resolves.toEqual({
       binary: "/usr/bin/gemini",
       poolReady: 1,
-      poolSize: 2,
+      poolSize: 1,
       version: "1.0.0",
     });
   });
