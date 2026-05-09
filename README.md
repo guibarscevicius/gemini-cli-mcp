@@ -396,6 +396,18 @@ The server pre-spawns Gemini CLI processes (warm pool) to eliminate the ~12 s co
 
 Set `GEMINI_POOL_STARTUP_MS` to match your machine's CLI startup time. Disable the pool with `GEMINI_POOL_ENABLED=0` for debugging.
 
+### Per-instance cost
+
+Every MCP client (each Claude Code window, Codex CLI session, editor, etc.) spawns its own `gemini-cli-mcp` server, and each server keeps its own warm pool. The total warm-process count on the box is roughly:
+
+```
+warm workers ≈ (open MCP clients) × (gemini-cli-mcp configs per client) × GEMINI_POOL_SIZE
+```
+
+Defaults are tuned for the multi-instance common case: `GEMINI_POOL_SIZE=1` keeps a single warm slot per server, and `GEMINI_POOL_IDLE_TIMEOUT_MS=300000` evicts idle workers down to `GEMINI_POOL_MIN_SIZE=0` after 5 min — so a developer with several open editors does not pay for warm pools they aren't using.
+
+If you raise `GEMINI_POOL_SIZE` above 1 for parallel batch work (`gemini-batch`, concurrent reviews), idle eviction reclaims the cost during quiet windows. To keep N slots permanently warm, set `GEMINI_POOL_MIN_SIZE=N`. To disable eviction entirely, set `GEMINI_POOL_IDLE_TIMEOUT_MS=0`.
+
 ## Limitations
 
 - **Free-tier rate limits apply** — Google's quotas govern, not this server. Heavy parallel workloads (`gemini-batch` with many prompts) will hit them; tune `GEMINI_MAX_CONCURRENT` accordingly.
@@ -419,8 +431,10 @@ All variables are optional.
 | `GEMINI_CACHE_TTL_MS` | `300000` | Response cache TTL (ms). `0` = disabled. |
 | `GEMINI_CACHE_MAX_ENTRIES` | `50` | Max entries in the response cache. |
 | `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only). |
-| `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes. |
+| `GEMINI_POOL_SIZE` | `1` | Number of pre-spawned warm processes per server. See [Per-instance cost](#per-instance-cost) before raising. |
 | `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms). Prompt writes are delayed by this amount after spawn. |
+| `GEMINI_POOL_IDLE_TIMEOUT_MS` | `300000` | Time of no `acquire()` calls after which the pool shrinks to `GEMINI_POOL_MIN_SIZE`. `0` disables eviction. |
+| `GEMINI_POOL_MIN_SIZE` | `0` | Floor the pool can shrink to during idle eviction. Must be ≤ `GEMINI_POOL_SIZE`. |
 | `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. When set, auto-discovery is skipped entirely. Useful when gemini is installed via nvm/fnm and not on the PATH that MCP servers see. |
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained (ms). |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |

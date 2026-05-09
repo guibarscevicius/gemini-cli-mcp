@@ -53,8 +53,10 @@ Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed rel
 | `GEMINI_CACHE_TTL_MS` | `300000` | Response cache TTL (ms); `0` = disabled |
 | `GEMINI_CACHE_MAX_ENTRIES` | `50` | Max entries in the response cache |
 | `GEMINI_POOL_ENABLED` | `1` | `0` = disable warm pool (cold spawn only, for debugging) |
-| `GEMINI_POOL_SIZE` | `GEMINI_MAX_CONCURRENT` | Number of pre-spawned warm processes |
+| `GEMINI_POOL_SIZE` | `1` | Number of pre-spawned warm processes per server. Combined with idle eviction, larger values are safe. |
 | `GEMINI_POOL_STARTUP_MS` | `12000` | Estimated CLI startup time (ms); prompt writes delayed until this age after spawn |
+| `GEMINI_POOL_IDLE_TIMEOUT_MS` | `300000` | Time of no `acquire()` calls after which the pool shrinks to `GEMINI_POOL_MIN_SIZE`. `0` = disabled. |
+| `GEMINI_POOL_MIN_SIZE` | `0` | Floor the pool can shrink to during idle eviction. Must be ≤ `GEMINI_POOL_SIZE`. |
 | `GEMINI_BINARY` | (auto-discovered) | Explicit path to the `gemini` binary. When set, auto-discovery is skipped. Useful for nvm/fnm users where gemini isn't on the MCP server's PATH. |
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained in memory (ms) |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection sweep interval (ms) |
