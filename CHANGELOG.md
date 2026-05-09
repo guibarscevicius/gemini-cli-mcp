@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.7.2...gemini-cli-mcp-v0.8.0) (2026-05-09)
+
+
+### Features
+
+* orphan-prevention defense-in-depth ([#97](https://github.com/guibarscevicius/gemini-cli-mcp/issues/97) + [#99](https://github.com/guibarscevicius/gemini-cli-mcp/issues/99)) ([#103](https://github.com/guibarscevicius/gemini-cli-mcp/issues/103)) ([18bd7a1](https://github.com/guibarscevicius/gemini-cli-mcp/commit/18bd7a1f556ff674b56c5c884111ec57f4d847a5))
+* pool-drift verifier + upstream-watch CI repair ([#106](https://github.com/guibarscevicius/gemini-cli-mcp/issues/106)) ([ff29cc4](https://github.com/guibarscevicius/gemini-cli-mcp/commit/ff29cc4719131e90897303dfefa2416e9e072519))
+
+
+### Bug Fixes
+
+* **warm-pool:** kill the entire gemini process group on shutdown ([#100](https://github.com/guibarscevicius/gemini-cli-mcp/issues/100)) ([dd85fec](https://github.com/guibarscevicius/gemini-cli-mcp/commit/dd85fec7f134c6d11d08140785d4829393444a15))
+
 ## [0.7.2](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.7.1...gemini-cli-mcp-v0.7.2) (2026-04-20)
 
 
