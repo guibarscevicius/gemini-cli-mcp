@@ -13,7 +13,7 @@ jobs:
   check-upstream:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Get latest upstream version
         id: upstream
@@ -45,9 +45,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LATEST: ${{ steps.compare.outputs.latest }}
         run: |
+          # `gh --jq` accepts only one expression argument; --arg is a jq-binary
+          # flag, not a gh flag. Pipe the JSON to standalone jq instead so we
+          # can use --arg safely without shell-quoting the version inline.
           COUNT=$(gh issue list --label upstream-update --state open --json title \
-            --jq --arg latest "$LATEST" \
-            '[.[] | select(.title == "upstream: gemini-cli \($latest) released" or (.title | startswith("upstream: gemini-cli \($latest) ")))] | length')
+            | jq --arg latest "$LATEST" \
+                '[.[] | select(.title == "upstream: gemini-cli \($latest) released" or (.title | startswith("upstream: gemini-cli \($latest) ")))] | length')
           echo "exists=$([ "$COUNT" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Create tracking issue
