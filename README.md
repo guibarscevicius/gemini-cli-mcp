@@ -22,12 +22,13 @@ The interesting engineering is the boring stuff: warm process pools so the 12-se
 flowchart LR
     A[Claude Code / Codex<br/>or any MCP host] -->|MCP tool call| B[gemini-cli-mcp]
     B <-->|read/write turns| D[(SQLite<br/>session store)]
-    B -->|borrow worker| C[Warm process pool]
-    C -->|stream-json over stdio| E[gemini CLI subprocess]
+    B -->|acquire worker| C[Warm process pool]
+    C -.-|manages| E[gemini CLI subprocess]
+    B <-->|stream-json over stdio| E
     E -->|HTTPS| F[Google Gemini API]
 ```
 
-The MCP server keeps a small pool of pre-spawned `gemini` CLI processes hot, so the first request after server start typically responds in 4–5 s instead of the 12 s a cold spawn would take. Multi-turn history is stored in SQLite (`node:sqlite`, no native deps) and replayed as structured context on every `gemini-reply`.
+The MCP server keeps a small pool of pre-spawned `gemini` CLI processes hot, so a request typically completes in ~4–5 s instead of ~17 s — eliminating the ~12 s cold-start overhead. Multi-turn history is stored in SQLite (`node:sqlite`, no native deps) and replayed as structured context on every `gemini-reply`.
 
 ## Quick Setup (recommended)
 
