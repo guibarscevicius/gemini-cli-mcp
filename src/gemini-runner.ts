@@ -213,6 +213,9 @@ if (POOL_ENABLED && !SETUP_MODE) {
       `[gemini-cli-mcp] first run detected — increased pool startup to ${effectiveStartupMs}ms\n`
     );
   }
+  // The args here MUST match the orphan-reaper signature on line 183 and
+  // PGREP_PATTERN in scripts/verify-pool-logic.mjs. If you change them, update
+  // all three sites — there's no automated coupling.
   warmPool = new WarmProcessPool(
     Number.isFinite(POOL_SIZE) && POOL_SIZE >= 1 ? POOL_SIZE : MAX_CONCURRENT,
     ["--yolo", "--output-format", "stream-json"],
