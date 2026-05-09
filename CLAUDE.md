@@ -70,7 +70,7 @@ injected into every spawned `gemini` process. Currently:
 
 - `GEMINI_CLI_NO_RELAUNCH=true` — disables `@google/gemini-cli`'s runtime
   self-relaunch (`relaunchAppInChildProcess`, located at
-  `packages/cli/src/utils/relaunch.ts` in v0.38.x of the upstream repo).
+  `packages/cli/src/utils/relaunch.ts` in v0.41.x of the upstream repo).
   Without this, the CLI re-execs itself with `--max-old-space-size=<50% RAM>`,
   producing two Node processes per warm-pool slot. With it set, we get one
   process per slot — verifiable via `pgrep -af "gemini --yolo"` (count should
@@ -78,9 +78,8 @@ injected into every spawned `gemini` process. Currently:
   heap (~4 GB on 64-bit). If a real prompt OOMs we revisit by passing
   `--max-old-space-size` explicitly.
 
-Contract verified at upstream v0.38.1 (installed) and v0.38.2 (latest). If a
-future release changes the env-var name or removes the gate, the unit
-propagation tests in `cli-capabilities` and `setup` will still pass — they mock
-`spawn`. The only reliable signal is the manual integration step: run
-`pgrep -af "gemini --yolo"` after server startup and verify the count equals
-`GEMINI_POOL_SIZE` (not 2× it).
+Contract verified at upstream v0.41.2. If a future release changes the env-var
+name or removes the gate, the unit propagation tests in `cli-capabilities` and
+`setup` will still pass — they mock `spawn`. The only reliable signal is the
+manual integration step: run `pgrep -af "gemini --yolo"` after server startup
+and verify the count equals `GEMINI_POOL_SIZE` (not 2× it).

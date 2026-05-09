@@ -33,16 +33,16 @@ const DETECTION_TIMEOUT_MS = 5_000;
  *
  * `GEMINI_CLI_NO_RELAUNCH=true` short-circuits @google/gemini-cli's runtime
  * self-relaunch (`relaunchAppInChildProcess`, located at
- * `packages/cli/src/utils/relaunch.ts` in v0.38.x of upstream),
+ * `packages/cli/src/utils/relaunch.ts` in v0.41.x of upstream),
  * which would otherwise spawn a second `node --max-old-space-size=<50% RAM>`
  * to inherit a larger heap. With one Node process per warm-pool slot we get a
  * flatter process tree, faster pool startup, and no shim-signal-propagation
  * contract to maintain. Trade-off: CLI runs at Node's default heap (~4 GB on
  * 64-bit) — sufficient for our concurrency limits.
  *
- * Verified contract at @google/gemini-cli v0.38.1 (installed) and v0.38.2
- * (latest): the env var is checked at the entry of relaunchAppInChildProcess
- * and used internally by the CLI to prevent relaunch recursion.
+ * Verified contract at @google/gemini-cli v0.41.2: the env var is checked at
+ * the entry of relaunchAppInChildProcess and used internally by the CLI to
+ * prevent relaunch recursion.
  */
 export const GEMINI_CHILD_ENV_OVERRIDES = {
   GEMINI_CLI_NO_RELAUNCH: "true",
