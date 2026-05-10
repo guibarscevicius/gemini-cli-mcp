@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.8.0...gemini-cli-mcp-v0.9.0) (2026-05-10)
+
+
+### Features
+
+* **warm-pool:** bound per-instance cost — lower default size + idle eviction ([#112](https://github.com/guibarscevicius/gemini-cli-mcp/issues/112)) ([1da0627](https://github.com/guibarscevicius/gemini-cli-mcp/commit/1da0627310ba450dfe4bfbf18dfa17a179070736))
+
 ## [0.8.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.7.2...gemini-cli-mcp-v0.8.0) (2026-05-09)
 
 
