@@ -310,6 +310,29 @@ Output (wait: true — timeout):
   pollIntervalMs  number
 ```
 
+## Resources
+
+Read-only data exposed via the MCP Resources API (no tool call required — hosts can cache by URI).
+
+### `gemini://models` — available Gemini models
+
+Returns the curated list of Gemini models with tier (`fast` / `balanced` / `deep`),
+description, and notes. Honors the `GEMINI_MODELS` env var (comma-separated IDs)
+as an override; when set, returned models have `source: "custom"` and `tier: "balanced"`.
+
+```
+Output:
+  models  array of { id, description, tier, notes }
+  total   number
+  source  "curated" | "custom"
+```
+
+### `gemini://server/health`, `gemini://sessions`, `gemini://jobs`
+
+Runtime diagnostics, active session list, and pending job list respectively.
+Templates `gemini://sessions/{sessionId}` and `gemini://jobs/{jobId}` return
+detail for a specific session or job.
+
 ## Async workflow
 
 `ask-gemini` returns immediately with a `jobId`. Use `gemini-poll` to check status:

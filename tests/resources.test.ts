@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 // --- mock gemini-runner ---
@@ -41,11 +41,12 @@ function parseContents(result: Awaited<ReturnType<typeof readResource>>): unknow
 }
 
 describe("STATIC_RESOURCES", () => {
-  it("contains all 3 static URIs", () => {
+  it("contains all 4 static URIs", () => {
     const uris = STATIC_RESOURCES.map((r) => r.uri);
     expect(uris).toContain("gemini://server/health");
     expect(uris).toContain("gemini://sessions");
     expect(uris).toContain("gemini://jobs");
+    expect(uris).toContain("gemini://models");
   });
 
   it("all static resources have mimeType application/json", () => {
@@ -210,6 +211,54 @@ describe("readResource", () => {
     expect(() => readResource("gemini://jobs/nope")).toThrow(
       expect.objectContaining({ code: ErrorCode.InvalidParams })
     );
+  });
+
+  // --- models ---
+  describe("gemini://models", () => {
+    const ORIGINAL_GEMINI_MODELS = process.env.GEMINI_MODELS;
+
+    beforeEach(() => {
+      delete process.env.GEMINI_MODELS;
+    });
+
+    afterEach(() => {
+      if (ORIGINAL_GEMINI_MODELS === undefined) delete process.env.GEMINI_MODELS;
+      else process.env.GEMINI_MODELS = ORIGINAL_GEMINI_MODELS;
+    });
+
+    it("returns the curated default list when GEMINI_MODELS is unset", () => {
+      const result = readResource("gemini://models");
+      const data = parseContents(result) as {
+        models: Array<{ id: string; tier: string; notes: string | null }>;
+        total: number;
+        source: string;
+      };
+      expect(data.source).toBe("curated");
+      expect(data.total).toBe(data.models.length);
+      expect(data.models.length).toBeGreaterThan(0);
+      // Sanity check: known curated id is present.
+      expect(data.models.map((m) => m.id)).toContain("gemini-3-flash-preview");
+    });
+
+    it("returns custom models when GEMINI_MODELS is set", () => {
+      process.env.GEMINI_MODELS = "alpha-1, beta-2 ,gamma-3";
+      const result = readResource("gemini://models");
+      const data = parseContents(result) as {
+        models: Array<{ id: string; tier: string; description: string }>;
+        total: number;
+        source: string;
+      };
+      expect(data.source).toBe("custom");
+      expect(data.total).toBe(3);
+      expect(data.models.map((m) => m.id)).toEqual(["alpha-1", "beta-2", "gamma-3"]);
+      expect(data.models.every((m) => m.tier === "balanced")).toBe(true);
+    });
+
+    it("preserves URI and mimeType in contents", () => {
+      const result = readResource("gemini://models");
+      expect(result.contents[0].uri).toBe("gemini://models");
+      expect(result.contents[0].mimeType).toBe("application/json");
+    });
   });
 
   // --- unknown URI ---

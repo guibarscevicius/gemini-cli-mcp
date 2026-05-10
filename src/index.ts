@@ -26,7 +26,6 @@ import { geminiListSessionsToolDefinition } from "./tools/gemini-list-sessions.j
 import { geminiExportToolDefinition } from "./tools/gemini-export.js";
 import { geminiBatchToolDefinition } from "./tools/gemini-batch.js";
 import { geminiResearchToolDefinition } from "./tools/gemini-research.js";
-import { geminiListModelsToolDefinition } from "./tools/gemini-list-models.js";
 import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
@@ -73,7 +72,6 @@ export function registerToolHandlers(server: ToolServer): void {
       geminiExportToolDefinition,
       geminiBatchToolDefinition,
       geminiResearchToolDefinition,
-      geminiListModelsToolDefinition,
     ],
   }));
 
