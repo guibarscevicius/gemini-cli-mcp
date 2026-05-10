@@ -16,17 +16,16 @@ const TOOL_NAMES = [
   "gemini-poll",
   "gemini-cancel",
   "gemini-health",
-  "gemini-list-sessions",
-  "gemini-export",
+  "gemini-sessions",
   "gemini-batch",
   "gemini-research",
-  "gemini-list-models",
 ];
 
 const RESOURCE_URIS = [
   "gemini://server/health",
   "gemini://sessions",
   "gemini://jobs",
+  "gemini://models",
 ];
 
 const PROMPT_CASES = [
@@ -337,14 +336,16 @@ async function main() {
     const sessionId = askAsync.sessionId;
     const firstJobId = askAsync.jobId;
 
+    // gemini-sessions, list path: no sessionId in arguments → returns active sessions.
     const sessionsList = parseToolResult(
-      await client.request("tools/call", { name: "gemini-list-sessions", arguments: {} }, 15_000)
+      await client.request("tools/call", { name: "gemini-sessions", arguments: {} }, 15_000)
     );
     assert(
       sessionsList.sessions.some((session) => session.id === sessionId),
-      `gemini-list-sessions missing session ${sessionId}`
+      `gemini-sessions (list) missing session ${sessionId}`
     );
-    logStep("PASS", "gemini-list-sessions");
+    assert(typeof sessionsList.total === "number", "gemini-sessions (list) missing total");
+    logStep("PASS", "gemini-sessions (list path)");
 
     const jobsResource = await client.request("resources/read", { uri: "gemini://jobs" }, 15_000);
     const jobsPayload = JSON.parse(jobsResource.contents[0].text);
@@ -374,24 +375,29 @@ async function main() {
     assert(replyResult.response.includes("smoke-reply-ok"), "gemini-reply did not return expected content");
     logStep("PASS", "gemini-reply");
 
+    // gemini-sessions, export path: presence of sessionId switches the discriminated tool
+    // into export mode (REST-style discriminator — see src/tools/gemini-sessions.ts).
     const exportJson = parseToolResult(
       await client.request(
         "tools/call",
-        { name: "gemini-export", arguments: { sessionId, format: "json" } },
+        { name: "gemini-sessions", arguments: { sessionId, format: "json" } },
         15_000
       )
     );
+    assert(exportJson.sessionId === sessionId, `Expected exportJson.sessionId === ${sessionId}, got ${exportJson.sessionId}`);
     assert(exportJson.turnCount >= 4, `Expected >=4 turns in JSON export, got ${exportJson.turnCount}`);
+    assert(exportJson.format === "json", `Expected format json, got ${exportJson.format}`);
 
     const exportMarkdown = parseToolResult(
       await client.request(
         "tools/call",
-        { name: "gemini-export", arguments: { sessionId, format: "markdown" } },
+        { name: "gemini-sessions", arguments: { sessionId, format: "markdown" } },
         15_000
       )
     );
     assert(exportMarkdown.content.includes("smoke-ok"), "Markdown export missing expected transcript content");
-    logStep("PASS", "gemini-export json + markdown");
+    assert(exportMarkdown.format === "markdown", `Expected format markdown, got ${exportMarkdown.format}`);
+    logStep("PASS", "gemini-sessions (export path) json + markdown");
 
     const batchResult = parseToolResult(
       await client.request(
@@ -432,11 +438,15 @@ async function main() {
     assert(typeof researchResult.response === "string" && researchResult.response.length > 0, "gemini-research returned no response");
     logStep("PASS", "gemini-research");
 
-    const modelsResult = parseToolResult(
-      await client.request("tools/call", { name: "gemini-list-models", arguments: {} }, 15_000)
-    );
-    assert(Array.isArray(modelsResult.models) && modelsResult.total >= 1, "gemini-list-models returned no models");
-    logStep("PASS", "gemini-list-models");
+    // gemini://models is now an MCP Resource, not a tool (#108). Validates that
+    // STATIC_RESOURCES registration AND readResource() dispatch both wired correctly.
+    const modelsResource = await client.request("resources/read", { uri: "gemini://models" }, 15_000);
+    const modelsPayload = JSON.parse(modelsResource.contents[0].text);
+    assert(Array.isArray(modelsPayload.models) && modelsPayload.total >= 1, "gemini://models returned no models");
+    assert(modelsPayload.total === modelsPayload.models.length, "gemini://models total/length mismatch");
+    assert(modelsPayload.source === "curated" || modelsPayload.source === "custom", `gemini://models unexpected source: ${modelsPayload.source}`);
+    assert(modelsResource.contents[0].mimeType === "application/json", "gemini://models missing application/json mimeType");
+    logStep("PASS", "resources/read gemini://models");
 
     const healthResource = await client.request("resources/read", { uri: "gemini://server/health" }, 15_000);
     const healthPayload = JSON.parse(healthResource.contents[0].text);

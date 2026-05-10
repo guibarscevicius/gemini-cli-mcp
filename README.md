@@ -224,36 +224,34 @@ Output:
   cli.detectionError     string | null   Error message if detection failed.
 ```
 
-### `gemini-list-sessions` — list active sessions
+### `gemini-sessions` — list or export sessions
+
+The discriminator is the presence of `sessionId`: omit it to list active
+sessions; provide it to export that session's full conversation history.
 
 ```
 Input:
-  (none)
+  sessionId   string   Optional. When omitted, returns the list of active sessions.
+                       When provided, returns the full conversation history of that session.
+  format      string   Optional. "json" (default) or "markdown". Only used with sessionId.
+  lastN       number   Optional. Export only the last N turns. Only used with sessionId.
 
-Output:
+Output (no sessionId — list path):
   sessions   array    Array of session objects, sorted by most recently accessed.
-    id             string   Session ID (pass to gemini-reply or gemini-export).
-    lastAccessed   string   ISO 8601 timestamp of the last turn.
+    id             string   Session ID (pass back as sessionId to export this session).
+    lastAccessed   number   Unix-ms timestamp of the last turn.
     turnCount      number   Number of turns stored in the session.
-    expiresAt      string   ISO 8601 timestamp when the session will expire (60 min after lastAccessed).
+    expiresAt      number   Unix-ms timestamp when the session will expire (60 min after lastAccessed).
   total      number   Total number of sessions.
-```
 
-### `gemini-export` — export session history
-
-```
-Input:
-  sessionId   string   Required. Session to export.
-  format      string   Optional. "json" (default) or "markdown".
-  lastN       number   Optional. Export only the last N turns (most recent). Omit for all turns.
-
-Output:
+Output (with sessionId — export path):
   sessionId       string   The exported session ID.
   turnCount       number   Number of turns included in the export.
   totalTurnCount  number   Total turns in the session (present only when lastN is used).
   format          string   The format used ("json" or "markdown").
-  turns           array    (format: "json") Array of { role, content } objects.
-  content         string   (format: "markdown") Formatted transcript as a markdown string.
+  turns           array    Array of { role, content } objects.
+  content         string   Pre-rendered representation in the requested format
+                           (JSON.stringify of turns, or bold-label markdown paragraphs).
   exportedAt      string   ISO 8601 timestamp of the export.
 ```
 
@@ -309,6 +307,29 @@ Output (wait: true — timeout):
   timedOut        true
   pollIntervalMs  number
 ```
+
+## Resources
+
+Read-only data exposed via the MCP Resources API (no tool call required — hosts can cache by URI).
+
+### `gemini://models` — available Gemini models
+
+Returns the curated list of Gemini models with tier (`fast` / `balanced` / `deep`),
+description, and notes. Honors the `GEMINI_MODELS` env var (comma-separated IDs)
+as an override; when set, returned models have `source: "custom"` and `tier: "balanced"`.
+
+```
+Output:
+  models  array of { id, description, tier, notes }
+  total   number
+  source  "curated" | "custom"
+```
+
+### `gemini://server/health`, `gemini://sessions`, `gemini://jobs`
+
+Runtime diagnostics, active session list, and pending job list respectively.
+Templates `gemini://sessions/{sessionId}` and `gemini://jobs/{jobId}` return
+detail for a specific session or job.
 
 ## Async workflow
 
@@ -439,7 +460,7 @@ All variables are optional.
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained (ms). |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |
 | `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded defaults). |
-| `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list returned by `gemini-list-models`. Custom entries are reported with `tier: "balanced"` and `description: "Custom model"`. |
+| `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list exposed by the `gemini://models` resource. Custom entries are reported with `source: "custom"`, `tier: "balanced"`, and `description: "Custom model"`. |
 
 ## CLI compatibility
 
@@ -468,7 +489,7 @@ When refreshing to a new upstream CLI version, use this acceptance flow:
 
 ```bash
 npm run build
-npm run test -- tests/cli-capabilities.test.ts tests/tools/gemini-list-models.test.ts tests/resources.test.ts tests/prompts.test.ts tests/logging.test.ts tests/index-server.test.ts
+npm run test -- tests/cli-capabilities.test.ts tests/resources.test.ts tests/prompts.test.ts tests/logging.test.ts tests/index-server.test.ts
 npm run test:smoke
 npm test
 ```

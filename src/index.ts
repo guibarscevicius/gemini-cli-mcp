@@ -22,11 +22,9 @@ import { geminiReplyToolDefinition } from "./tools/gemini-reply.js";
 import { geminiPollToolDefinition } from "./tools/gemini-poll.js";
 import { geminiCancelToolDefinition } from "./tools/gemini-cancel.js";
 import { geminiHealthToolDefinition } from "./tools/gemini-health.js";
-import { geminiListSessionsToolDefinition } from "./tools/gemini-list-sessions.js";
-import { geminiExportToolDefinition } from "./tools/gemini-export.js";
+import { geminiSessionsToolDefinition } from "./tools/gemini-sessions.js";
 import { geminiBatchToolDefinition } from "./tools/gemini-batch.js";
 import { geminiResearchToolDefinition } from "./tools/gemini-research.js";
-import { geminiListModelsToolDefinition } from "./tools/gemini-list-models.js";
 import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
@@ -69,11 +67,9 @@ export function registerToolHandlers(server: ToolServer): void {
       geminiPollToolDefinition,
       geminiCancelToolDefinition,
       geminiHealthToolDefinition,
-      geminiListSessionsToolDefinition,
-      geminiExportToolDefinition,
+      geminiSessionsToolDefinition,
       geminiBatchToolDefinition,
       geminiResearchToolDefinition,
-      geminiListModelsToolDefinition,
     ],
   }));
 

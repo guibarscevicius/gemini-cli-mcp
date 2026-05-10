@@ -4,6 +4,7 @@ import type { Resource, ResourceTemplate, ReadResourceResult } from "@modelconte
 import { GEMINI_BINARY, getServerStats } from "./gemini-runner.js";
 import { getJobStats, listActiveJobs, getJob } from "./job-store.js";
 import { sessionStore } from "./session-store.js";
+import { getModelsPayload } from "./models-data.js";
 
 const _require = createRequire(import.meta.url);
 const { version: pkgVersion } = _require("../package.json") as { version: string };
@@ -26,6 +27,14 @@ export const STATIC_RESOURCES: Resource[] = [
     uri: "gemini://jobs",
     name: "Pending Jobs",
     description: "All currently pending jobs with id and createdAt timestamp.",
+    mimeType: "application/json",
+  },
+  {
+    uri: "gemini://models",
+    name: "Gemini Models",
+    description:
+      "Curated list of Gemini models with tier, description, and notes. " +
+      "Honors the GEMINI_MODELS env var (comma-separated IDs) as an override.",
     mimeType: "application/json",
   },
 ];
@@ -95,6 +104,10 @@ function readJobsList(uri: string): ReadResourceResult {
   return toJson(uri, { jobs: listActiveJobs() });
 }
 
+function readModels(uri: string): ReadResourceResult {
+  return toJson(uri, getModelsPayload());
+}
+
 function readSession(uri: string, sessionId: string): ReadResourceResult {
   const meta = sessionStore.getSessionMeta(sessionId);
   if (!meta) {
@@ -131,6 +144,7 @@ export function readResource(uri: string): ReadResourceResult {
   if (uri === "gemini://server/health") return readHealth(uri);
   if (uri === "gemini://sessions") return readSessionsList(uri);
   if (uri === "gemini://jobs") return readJobsList(uri);
+  if (uri === "gemini://models") return readModels(uri);
 
   const sessionMatch = SESSION_RE.exec(uri);
   if (sessionMatch) return readSession(uri, sessionMatch[1]);

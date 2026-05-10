@@ -87,7 +87,7 @@ jobs:
           - [ ] Update \`MIN_SUPPORTED_VERSION\` if older versions are no longer viable
           - [ ] Run integration tests with the new version
           - [ ] Update \`.github/upstream-version.txt\` to \`$LATEST\`
-          - [ ] Update default model list in \`gemini-list-models\` if models changed
+          - [ ] Update default model list in \`src/models-data.ts\` (served by the \`gemini://models\` resource) if models changed
 
           ### Links
 
