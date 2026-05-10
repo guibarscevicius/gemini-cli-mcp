@@ -1,16 +1,37 @@
 import { type ChildProcess } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
-import { readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { unlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as nodePath from "node:path";
-import { escape as escapeGlob, glob } from "glob";
-import pLimit from "p-limit";
 import { WarmProcessPool, type WarmProcess } from "./warm-pool.js";
 import { mcpLog } from "./logging.js";
 import { getCapabilities, buildBaseArgs, GEMINI_CHILD_ENV_OVERRIDES } from "./cli-capabilities.js";
 import { spawnInGroup, killGroup } from "./process-group.js";
 import { reapOrphans } from "./orphan-reaper.js";
+import {
+  Semaphore,
+  SemaphoreTimeoutError,
+  MAX_CONCURRENT,
+  QUEUE_TIMEOUT_MS,
+  semaphore,
+} from "./concurrency.js";
+import { discoverGeminiBinary, GEMINI_BINARY } from "./binary-discovery.js";
+import { countFileRefs, expandFileRefs, LARGE_PROMPT_THRESHOLD } from "./prompt-prep.js";
+import {
+  cache,
+  cacheKey,
+  clearCache,
+  CACHE_TTL_MS,
+  CACHE_MAX_ENTRIES,
+} from "./response-cache.js";
+
+// Re-export at original paths so consumers (resources.ts, index.ts, tools/*, setup.ts)
+// don't need to update import sites — the file split (#109) is mechanical.
+export { Semaphore, SemaphoreTimeoutError } from "./concurrency.js";
+export { discoverGeminiBinary, GEMINI_BINARY } from "./binary-discovery.js";
+export { expandFileRefs, countFileRefs } from "./prompt-prep.js";
+export { clearCache } from "./response-cache.js";
 
 export class GeminiOutputError extends Error {
   constructor(message: string, public sanitizedMessage: string) {
@@ -19,75 +40,8 @@ export class GeminiOutputError extends Error {
   }
 }
 
-export class SemaphoreTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`Gemini request timed out after ${timeoutMs}ms waiting for a concurrency slot`);
-    this.name = "SemaphoreTimeoutError";
-  }
-}
-
 // 300 s - allows Gemini 2.5 Pro deep-reasoning tasks (can take 2–3 min before first token)
 const TIMEOUT_MS = 300_000;
-
-// Linux MAX_ARG_STRLEN = PAGE_SIZE × 32 = 131,072 bytes (~128 KB) caps any single exec arg.
-// Prompts larger than this threshold are written to a temp file and referenced via @path
-// so the CLI reads from disk, completely bypassing the per-argument kernel limit.
-const LARGE_PROMPT_THRESHOLD = 110 * 1024; // 110 KB — 15% below the ~127 KB measured ceiling
-
-class Semaphore {
-  private queue: Array<() => void> = [];
-  private running = 0;
-
-  constructor(private readonly max: number) {}
-
-  acquire(timeoutMs?: number): Promise<void> {
-    if (this.running < this.max) {
-      this.running++;
-      return Promise.resolve();
-    }
-
-    return new Promise<void>((resolve, reject) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const slot = () => {
-        if (timer) clearTimeout(timer);
-        this.running++;
-        resolve();
-      };
-
-      if (timeoutMs !== undefined) {
-        timer = setTimeout(() => {
-          const index = this.queue.indexOf(slot);
-          if (index !== -1) {
-            this.queue.splice(index, 1);
-            reject(new SemaphoreTimeoutError(timeoutMs));
-          }
-        }, timeoutMs);
-      }
-
-      this.queue.push(slot);
-    });
-  }
-
-  release(): void {
-    if (this.running <= 0) return; // defensive: should never be called without a matching acquire
-    this.running--;
-    this.queue.shift()?.();
-  }
-
-  stats(): { active: number; queued: number } {
-    return { active: this.running, queued: this.queue.length };
-  }
-}
-
-const MAX_CONCURRENT = parseInt(process.env.GEMINI_MAX_CONCURRENT ?? "2", 10);
-if (!Number.isFinite(MAX_CONCURRENT) || MAX_CONCURRENT < 1) {
-  throw new Error(
-    `GEMINI_MAX_CONCURRENT must be a positive integer, got "${process.env.GEMINI_MAX_CONCURRENT}". ` +
-      "Use 1 for strict serialization or omit to use the default (2)."
-  );
-}
-const QUEUE_TIMEOUT_MS = parseInt(process.env.GEMINI_QUEUE_TIMEOUT_MS ?? "60000", 10);
-const semaphore = new Semaphore(MAX_CONCURRENT);
 
 // ── Warm process pool ──────────────────────────────────────────────────────
 // Pre-spawns Gemini processes so the ~12–17 s cold-start cost is paid in advance.
@@ -136,62 +90,6 @@ if (POOL_ENABLED) {
     );
   }
 }
-
-function readdirSafe(dir: string): string[] {
-  try {
-    return readdirSync(dir);
-  } catch (err) {
-    if ((err as { code?: string }).code !== "ENOENT") {
-      process.stderr.write(
-        `[gemini-cli-mcp] warning: cannot read ${dir}: ${(err as Error).message}\n`
-      );
-    }
-    return [];
-  }
-}
-
-export function discoverGeminiBinary(): string {
-  const explicit = process.env.GEMINI_BINARY;
-  if (explicit) return explicit;
-
-  const home = os.homedir();
-  const candidates: string[] = [];
-
-  // nvm — sort descending so latest version wins
-  const nvmVersions = readdirSafe(nodePath.join(home, ".nvm/versions/node")).sort().reverse();
-  for (const v of nvmVersions) {
-    candidates.push(nodePath.join(home, `.nvm/versions/node/${v}/bin/gemini`));
-  }
-
-  // fnm
-  const fnmVersions = readdirSafe(nodePath.join(home, ".fnm/node-versions")).sort().reverse();
-  for (const v of fnmVersions) {
-    candidates.push(nodePath.join(home, `.fnm/node-versions/${v}/installation/bin/gemini`));
-  }
-
-  // volta
-  candidates.push(nodePath.join(home, ".volta/bin/gemini"));
-
-  // asdf
-  const asdfVersions = readdirSafe(nodePath.join(home, ".asdf/installs/nodejs")).sort().reverse();
-  for (const v of asdfVersions) {
-    candidates.push(nodePath.join(home, `.asdf/installs/nodejs/${v}/bin/gemini`));
-  }
-
-  // Homebrew (Apple Silicon + Intel)
-  candidates.push("/opt/homebrew/bin/gemini", "/usr/local/bin/gemini");
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      process.stderr.write(`[gemini-cli-mcp] auto-discovered gemini at: ${candidate}\n`);
-      return candidate;
-    }
-  }
-
-  return "gemini"; // fallback to PATH; cold-spawn gives a clear ENOENT; warm pool detects after 5 failures
-}
-
-export const GEMINI_BINARY: string = discoverGeminiBinary();
 
 export let warmPool: WarmProcessPool | null = null;
 
@@ -279,15 +177,6 @@ if (!SETUP_MODE) {
 const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES ?? "3", 10);
 const RETRY_BASE_MS = parseInt(process.env.GEMINI_RETRY_BASE_MS ?? "1000", 10);
 
-const CACHE_TTL_MS = Math.trunc(Number(process.env.GEMINI_CACHE_TTL_MS ?? "300000"));
-if (CACHE_TTL_MS < 0 || !Number.isFinite(CACHE_TTL_MS)) {
-  throw new Error("GEMINI_CACHE_TTL_MS must be a non-negative integer (0 = disabled)");
-}
-const CACHE_MAX_ENTRIES = Math.trunc(Number(process.env.GEMINI_CACHE_MAX_ENTRIES ?? "50"));
-if (CACHE_MAX_ENTRIES < 1 || !Number.isFinite(CACHE_MAX_ENTRIES)) {
-  throw new Error("GEMINI_CACHE_MAX_ENTRIES must be a positive integer");
-}
-
 const DEFAULT_SESSION_DB = nodePath.join(os.homedir(), ".gemini-cli-mcp", "sessions.db");
 
 function parseIntOverride(key: string, defaultValue: number): number | string | undefined {
@@ -353,20 +242,6 @@ export function getServerStats() {
     },
     maxConcurrent: MAX_CONCURRENT,
   };
-}
-
-interface CacheEntry { response: string; expiresAt: number; }
-const cache = new Map<string, CacheEntry>();
-
-/** @internal Clears all cached entries. Exposed for test isolation only — not part of the public API. */
-export function clearCache(): void {
-  cache.clear();
-}
-
-function cacheKey(prompt: string, opts: GeminiOptions): string {
-  return createHash("sha256")
-    .update(JSON.stringify({ prompt, model: opts.model ?? "", cwd: opts.cwd ?? "" }))
-    .digest("hex");
 }
 
 function isRetryable(err: unknown): boolean {
@@ -709,235 +584,6 @@ const defaultExecutor: GeminiExecutor = (args, opts, onChunk) =>
       reject
     );
   });
-
-/**
- * Two-phase @file extraction (greedy regex → balanced-delimiter state machine).
- *
- * Phase 1 — GREEDY_AT_RE: captures everything after `@` up to whitespace, `@`,
- * `,`, or `;`. Intentionally over-captures so that paths containing `()` and
- * `[]` (Next.js route groups, dynamic segments, SvelteKit params) are not
- * truncated by the regex.
- *
- * Phase 2 — extractBalancedPath(): walks the captured token tracking `()` and
- * `[]` depth. Unmatched trailing `)` or `]` at depth 0 are stripped as
- * punctuation. Trailing `:!?` are also stripped.
- *
- * Inspired by CommonMark's balanced-parenthesis counting for link destinations
- * (spec §6.7), but extended to handle `[]` and to trim (rather than reject)
- * unmatched trailing closers.
- */
-const GREEDY_AT_RE = /(?:^|(?<=\s))@([^\s@,;]+)/g;
-
-/**
- * Characters that signal the token is NOT a file path — used to reject
- * framework template syntax (@click.prevent="save"), shell pipes (@cmd|grep),
- * angle-bracket patterns (@foo<div>), and similar false positives.  (#38)
- *
- * `=` / `"` / `'` → attribute bindings (Vue, Angular, Svelte)
- * `<` / `>`       → HTML/JSX angle brackets
- * `|`             → shell pipes
- * `` ` ``         → template literals / inline code
- */
-const NON_PATH_CHARS_RE = /[='"<>|`]/;
-
-/**
- * Strip unmatched trailing `)` / `]` and trailing punctuation from a
- * greedily-captured @file token.
- *
- * For each trailing `)` or `]`, re-scans `raw[0..end)` to check whether it
- * has a matching opener. Unmatched trailing closers and trailing `:!?` are
- * trimmed. Inspired by CommonMark's balanced-parenthesis counting for link
- * destinations (spec §6.7), but extended to handle `[]` and to trim (rather
- * than reject) unmatched trailing closers.
- */
-function extractBalancedPath(raw: string): string {
-  let end = raw.length;
-
-  // Trim unmatched trailing closers and punctuation from the right
-  while (end > 0) {
-    const ch = raw[end - 1];
-    if (ch === ")" || ch === "]") {
-      const open = ch === ")" ? "(" : "[";
-      let depth = 0;
-      for (let i = 0; i < end; i++) {
-        if (raw[i] === open) depth++;
-        else if (raw[i] === ch) depth--;
-      }
-      // depth < 0 means more closers than openers — trailing one is unmatched
-      if (depth < 0) { end--; continue; }
-      break;
-    }
-    if (".:!?".includes(ch)) { end--; continue; }
-    break;
-  }
-
-  return raw.slice(0, end);
-}
-
-/**
- * Extract @file references from a prompt using the two-phase approach.
- * Returns only tokens whose path contains at least one `/` or `.` — this
- * rejects bare @mentions (e.g. @alice) and most email-like patterns.
- */
-function extractFileRefs(text: string): string[] {
-  const paths: string[] = [];
-  // Reset lastIndex for global regex
-  GREEDY_AT_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = GREEDY_AT_RE.exec(text)) !== null) {
-    // Skip tokens containing characters that signal non-file-path context —
-    // catches Vue/Angular template syntax (@click.prevent="..."), shell pipes,
-    // string delimiters, and similar false positives.  (#38)
-    if (NON_PATH_CHARS_RE.test(match[1])) {
-      if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
-        process.stderr.write(JSON.stringify({
-          event: "file_ref_skipped",
-          token: match[1].slice(0, 80),
-          reason: "non_path_chars",
-        }) + "\n");
-      }
-      continue;
-    }
-    const balanced = extractBalancedPath(match[1]);
-    if (/[/.]/.test(balanced)) {
-      paths.push(balanced);
-    }
-  }
-  return paths;
-}
-
-/** Count the number of @file tokens in a prompt. */
-export function countFileRefs(prompt: string): number {
-  return extractFileRefs(prompt).length;
-}
-
-/**
- * Escape `[]` in path segments that are not glob wildcards, so that literal
- * directory names like `[slug]` are not interpreted as glob character classes.
- *
- * Splits the path on `/`, and for each segment that does NOT contain `*`, `?`,
- * or `{`, escapes it with `glob.escape()`. Segments that contain wildcards are
- * left untouched so the glob engine can interpret them.
- */
-function escapeGlobSegments(rawPath: string): string {
-  return rawPath
-    .split("/")
-    .map((seg) => (/[*?{]/.test(seg) ? seg : escapeGlob(seg)))
-    .join("/");
-}
-
-/**
- * Expand 2+ @file tokens in a prompt by reading the files and appending a
- * REFERENCE block. Single @file tokens are left untouched so the CLI handles
- * them natively (workspace boundary enforcement, etc.).
- *
- * @tokens in the prompt are masked (@ stripped) after expansion to prevent the
- * Gemini CLI from re-expanding them; file contents are appended in a
- * `[REFERENCE_CONTENT_START] ... [REFERENCE_CONTENT_END]` block and are NOT
- * inlined at the token position.
- *
- * Throws if any referenced file is not found, is a directory, or resolves
- * (following symlinks) to a path outside `cwd`.
- */
-export async function expandFileRefs(prompt: string, cwd: string): Promise<string> {
-  const fileRefs = extractFileRefs(prompt);
-  if (fileRefs.length < 2) return prompt;
-
-  const cwdResolved = nodePath.resolve(cwd);
-  let realCwd: string;
-  try {
-    realCwd = await realpath(cwdResolved);
-  } catch (err) {
-    throw new Error(`cwd does not exist or is not accessible: ${cwdResolved}`, { cause: err });
-  }
-
-  const limit = pLimit(8);
-  const sectionGroups = await Promise.all(
-    fileRefs.map((rawPath) =>
-      limit(async () => {
-        let filePaths: string[];
-        if (/[*?{]/.test(rawPath)) {
-          try {
-            filePaths = await glob(escapeGlobSegments(rawPath), {
-              cwd: realCwd,
-              absolute: true,
-              nodir: true,
-            });
-          } catch (err) {
-            throw new Error(
-              `Failed to expand glob pattern @${rawPath} in ${realCwd}: ${(err as Error).message}`,
-              { cause: err }
-            );
-          }
-          if (filePaths.length === 0) {
-            throw new Error(`File not found: @${rawPath} — no files matched in ${realCwd}`);
-          }
-        } else {
-          filePaths = [nodePath.resolve(realCwd, rawPath)];
-        }
-
-        return Promise.all(
-          filePaths.map(async (absPath) => {
-            // realpath() follows symlinks — prevents a symlink inside cwd from escaping the workspace
-            let realAbsPath: string;
-            try {
-              realAbsPath = await realpath(absPath);
-            } catch (err) {
-              const code = (err as { code?: string }).code;
-              const detail = code === "EACCES" ? "permission denied" : "does not exist";
-              throw new Error(`File not found: @${rawPath} — ${absPath} ${detail}`, { cause: err });
-            }
-
-            const cwdPrefix = realCwd.endsWith(nodePath.sep) ? realCwd : realCwd + nodePath.sep;
-            if (!realAbsPath.startsWith(cwdPrefix) && realAbsPath !== realCwd) {
-              throw new Error(
-                `Path not in workspace: @${rawPath} resolves to ${realAbsPath} which is outside ${realCwd}`
-              );
-            }
-
-            const readErrorDetails: Record<string, string> = {
-              EISDIR: "is a directory — use a glob pattern like @src/**/*.ts",
-              EACCES: "permission denied",
-            };
-            let content: string;
-            try {
-              content = await readFile(realAbsPath, "utf-8");
-            } catch (err) {
-              const code = (err as { code?: string }).code ?? "unknown";
-              const detail = readErrorDetails[code] ?? `read failed (${code})`;
-              throw new Error(`Cannot read @${rawPath} — ${absPath} ${detail}`, { cause: err });
-            }
-
-            const relPath = nodePath.relative(realCwd, realAbsPath);
-            return `Content from @${relPath}:\n${content}`;
-          })
-        );
-      })
-    )
-  );
-  const sections = sectionGroups.flat();
-
-  // Mask @tokens in the prompt text to prevent double expansion by the CLI
-  // We use a replacement function with the same regex to ensure consistency.
-  GREEDY_AT_RE.lastIndex = 0;
-  const maskedPrompt = prompt.replace(GREEDY_AT_RE, (match, pathToken) => {
-    // Apply the same non-path filter as extractFileRefs — without this,
-    // framework tokens like @click.prevent="save" get their @ stripped.  (#38)
-    if (NON_PATH_CHARS_RE.test(pathToken)) return match;
-    const balanced = extractBalancedPath(pathToken);
-    if (/[/.]/.test(balanced)) {
-      // Replace the matched token (including @) with just the balanced path.
-      // We keep the rest of the original token if any (punctuation that was trimmed).
-      return match.replace(`@${balanced}`, balanced);
-    }
-    return match;
-  });
-
-  // Sentinel delimiters give the model a clear boundary for injected content.
-  // The "Content from @<relPath>:" header preserves the original @token reference.
-  const referenceBlock = `\n\n[REFERENCE_CONTENT_START]\n${sections.join("\n\n")}\n[REFERENCE_CONTENT_END]`;
-  return maskedPrompt + referenceBlock;
-}
 
 /**
  * Runs `gemini` as a subprocess with no shell interpolation.

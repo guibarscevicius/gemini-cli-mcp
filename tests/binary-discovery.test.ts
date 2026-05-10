@@ -19,7 +19,7 @@ describe("discoverGeminiBinary", () => {
 
   it("returns GEMINI_BINARY env var when set", async () => {
     process.env.GEMINI_BINARY = "/custom/path/to/gemini";
-    const { discoverGeminiBinary } = await import("../src/gemini-runner.js");
+    const { discoverGeminiBinary } = await import("../src/binary-discovery.js");
     expect(discoverGeminiBinary()).toBe("/custom/path/to/gemini");
   });
 
@@ -34,7 +34,7 @@ describe("discoverGeminiBinary", () => {
       };
     });
 
-    const { discoverGeminiBinary } = await import("../src/gemini-runner.js");
+    const { discoverGeminiBinary } = await import("../src/binary-discovery.js");
     expect(discoverGeminiBinary()).toBe("gemini");
   });
 
@@ -53,7 +53,7 @@ describe("discoverGeminiBinary", () => {
       };
     });
 
-    const { discoverGeminiBinary } = await import("../src/gemini-runner.js");
+    const { discoverGeminiBinary } = await import("../src/binary-discovery.js");
     const result = discoverGeminiBinary();
     // Should pick the latest (sorted descending: v24.0.0 first)
     expect(result).toContain(".nvm/versions/node");
@@ -73,7 +73,7 @@ describe("discoverGeminiBinary", () => {
       };
     });
 
-    const { discoverGeminiBinary } = await import("../src/gemini-runner.js");
+    const { discoverGeminiBinary } = await import("../src/binary-discovery.js");
     // Should not throw; should fall back to "gemini"
     expect(() => discoverGeminiBinary()).not.toThrow();
     expect(discoverGeminiBinary()).toBe("gemini");
