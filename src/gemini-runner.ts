@@ -9,22 +9,10 @@ import { mcpLog } from "./logging.js";
 import { getCapabilities, buildBaseArgs, GEMINI_CHILD_ENV_OVERRIDES } from "./cli-capabilities.js";
 import { spawnInGroup, killGroup } from "./process-group.js";
 import { reapOrphans } from "./orphan-reaper.js";
-import {
-  Semaphore,
-  SemaphoreTimeoutError,
-  MAX_CONCURRENT,
-  QUEUE_TIMEOUT_MS,
-  semaphore,
-} from "./concurrency.js";
-import { discoverGeminiBinary, GEMINI_BINARY } from "./binary-discovery.js";
+import { MAX_CONCURRENT, QUEUE_TIMEOUT_MS, semaphore } from "./concurrency.js";
+import { GEMINI_BINARY } from "./binary-discovery.js";
 import { countFileRefs, expandFileRefs, LARGE_PROMPT_THRESHOLD } from "./prompt-prep.js";
-import {
-  cache,
-  cacheKey,
-  clearCache,
-  CACHE_TTL_MS,
-  CACHE_MAX_ENTRIES,
-} from "./response-cache.js";
+import { cache, cacheKey, CACHE_TTL_MS, CACHE_MAX_ENTRIES } from "./response-cache.js";
 
 // Re-export at original paths so consumers (resources.ts, index.ts, tools/*, setup.ts)
 // don't need to update import sites — the file split (#109) is mechanical.
