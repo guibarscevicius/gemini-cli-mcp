@@ -13,8 +13,7 @@ import { geminiReply } from "./tools/gemini-reply.js";
 import { geminiPoll } from "./tools/gemini-poll.js";
 import { geminiCancel } from "./tools/gemini-cancel.js";
 import { geminiHealth } from "./tools/gemini-health.js";
-import { geminiListSessions } from "./tools/gemini-list-sessions.js";
-import { geminiExport } from "./tools/gemini-export.js";
+import { geminiSessions } from "./tools/gemini-sessions.js";
 import { geminiBatch } from "./tools/gemini-batch.js";
 import { geminiResearch } from "./tools/gemini-research.js";
 import { mcpLog } from "./logging.js";
@@ -101,16 +100,8 @@ export async function handleCallTool(
           };
         }
 
-        case "gemini-list-sessions": {
-          const result = await geminiListSessions(args);
-          return {
-            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-            structuredContent: result as unknown as Record<string, unknown>,
-          };
-        }
-
-        case "gemini-export": {
-          const result = await geminiExport(args);
+        case "gemini-sessions": {
+          const result = await geminiSessions(args);
           return {
             content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
             structuredContent: result as unknown as Record<string, unknown>,

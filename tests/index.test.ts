@@ -17,8 +17,7 @@ import { geminiReplyToolDefinition } from "../src/tools/gemini-reply.js";
 import { geminiPollToolDefinition } from "../src/tools/gemini-poll.js";
 import { geminiCancelToolDefinition } from "../src/tools/gemini-cancel.js";
 import { geminiHealthToolDefinition } from "../src/tools/gemini-health.js";
-import { geminiListSessionsToolDefinition } from "../src/tools/gemini-list-sessions.js";
-import { geminiExportToolDefinition } from "../src/tools/gemini-export.js";
+import { geminiSessionsToolDefinition } from "../src/tools/gemini-sessions.js";
 import { geminiBatchToolDefinition } from "../src/tools/gemini-batch.js";
 import { geminiResearchToolDefinition } from "../src/tools/gemini-research.js";
 
@@ -52,7 +51,7 @@ describe("index wiring", () => {
     } as Parameters<typeof registerToolHandlers>[0]);
   });
 
-  it("registers the list-tools handler with all nine tool definitions", async () => {
+  it("registers the list-tools handler with all eight tool definitions", async () => {
     const listTools = handlers.get(ListToolsRequestSchema);
     expect(listTools).toBeDefined();
     await expect(listTools!({ params: {} })).resolves.toEqual({
@@ -62,8 +61,7 @@ describe("index wiring", () => {
         geminiPollToolDefinition,
         geminiCancelToolDefinition,
         geminiHealthToolDefinition,
-        geminiListSessionsToolDefinition,
-        geminiExportToolDefinition,
+        geminiSessionsToolDefinition,
         geminiBatchToolDefinition,
         geminiResearchToolDefinition,
       ],
