@@ -1,11 +1,17 @@
 # gemini-cli-mcp — Claude Instructions
 
 ## Key source files
-- `src/gemini-runner.ts` — subprocess execution, warm pool integration, semaphore, retry, telemetry
+- `src/gemini-runner.ts` — subprocess execution, retry, telemetry; re-exports the four extracted modules below at their original paths so consumers don't need to update imports
+- `src/concurrency.ts` — `Semaphore`, `MAX_CONCURRENT`, `QUEUE_TIMEOUT_MS` (extracted from runner, #109)
+- `src/binary-discovery.ts` — `discoverGeminiBinary`, `GEMINI_BINARY` resolution across nvm/fnm/asdf/volta/Homebrew (#109)
+- `src/prompt-prep.ts` — `@file` ref expansion + `LARGE_PROMPT_THRESHOLD` heuristics (#109)
+- `src/response-cache.ts` — `cache` Map + `cacheKey`, `clearCache`, TTL/eviction constants (#109)
+- `src/models-data.ts` — curated model list + `GEMINI_MODELS` env override; backs the `gemini://models` resource (#108)
 - `src/warm-pool.ts` — pre-spawned Gemini process pool (WarmProcessPool)
 - `src/session-store.ts` — SQLite-backed multi-turn session store (node:sqlite)
 - `src/setup.ts` — `--setup` wizard (binary discovery, auth check, MCP config output)
-- `src/tools/ask-gemini.ts`, `src/tools/gemini-reply.ts` — MCP tool handlers
+- `src/tools/ask-gemini.ts`, `src/tools/gemini-reply.ts`, `src/tools/gemini-sessions.ts` — MCP tool handlers (`gemini-sessions` is discriminated on presence of `sessionId`: omit ⇒ list, provide ⇒ export)
+- `src/resources.ts` — MCP Resource registry (`gemini://server/health`, `gemini://sessions`, `gemini://jobs`, `gemini://models`)
 - `src/cli-capabilities.ts` — CLI version detection, flag probing, buildBaseArgs (detectCapabilities, getCapabilities)
 - `src/dispatcher.ts` — routes MCP tool calls + error handling
 
@@ -62,7 +68,7 @@ Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed rel
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained in memory (ms) |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection sweep interval (ms) |
 | `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded fallback args) |
-| `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list for `gemini-list-models` |
+| `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list exposed by the `gemini://models` resource. Custom entries report `source: "custom"`, `tier: "balanced"`, `description: "Custom model"`. |
 | `GEMINI_DISABLE_PDEATHSIG` | `0` | `1` = skip the `setpriv --pdeathsig TERM` wrapper around child spawns (Linux only). Escape hatch for the issue #97 kernel-level PDEATHSIG safety net; only the literal string `"1"` disables. |
 | `GEMINI_ORPHAN_REAPER` | `1` | `0` = disable the issue #99 startup sweep that reaps orphaned `gemini --yolo --output-format stream-json` workers belonging to the current user (orphans whose parent is PID 1 *or* a root-owned subreaper ancestor — see `findLinuxSubreaperAncestors` for the WSL2/systemd-user/container case). POSIX-only; no-op on Windows. |
 

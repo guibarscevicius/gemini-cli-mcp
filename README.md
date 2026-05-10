@@ -460,7 +460,7 @@ All variables are optional.
 | `GEMINI_JOB_TTL_MS` | `300000` | How long completed/failed/cancelled jobs are retained (ms). |
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |
 | `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded defaults). |
-| `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list returned by `gemini-list-models`. Custom entries are reported with `tier: "balanced"` and `description: "Custom model"`. |
+| `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list exposed by the `gemini://models` resource. Custom entries are reported with `source: "custom"`, `tier: "balanced"`, and `description: "Custom model"`. |
 
 ## CLI compatibility
 
@@ -489,7 +489,7 @@ When refreshing to a new upstream CLI version, use this acceptance flow:
 
 ```bash
 npm run build
-npm run test -- tests/cli-capabilities.test.ts tests/tools/gemini-list-models.test.ts tests/resources.test.ts tests/prompts.test.ts tests/logging.test.ts tests/index-server.test.ts
+npm run test -- tests/cli-capabilities.test.ts tests/resources.test.ts tests/prompts.test.ts tests/logging.test.ts tests/index-server.test.ts
 npm run test:smoke
 npm test
 ```

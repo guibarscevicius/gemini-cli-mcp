@@ -11,6 +11,15 @@ if (CACHE_MAX_ENTRIES < 1 || !Number.isFinite(CACHE_MAX_ENTRIES)) {
 
 export interface CacheEntry { response: string; expiresAt: number; }
 
+/**
+ * @internal
+ * Cross-module-shared response cache. Exported so `gemini-runner.ts` can read/evict
+ * directly without an accessor indirection — this is module-local state, not part of
+ * the public API. Callers MUST honor the TTL contract (skip entries where
+ * `Date.now() >= expiresAt`) and the `CACHE_MAX_ENTRIES` cap on inserts. Encapsulating
+ * this behind typed accessors is tracked as a future refactor; touching it here would
+ * exceed the no-behavior-change scope of the post-audit cleanup (#109).
+ */
 export const cache = new Map<string, CacheEntry>();
 
 /** @internal Clears all cached entries. Exposed for test isolation only — not part of the public API. */

@@ -254,6 +254,30 @@ describe("readResource", () => {
       expect(data.models.every((m) => m.tier === "balanced")).toBe(true);
     });
 
+    it("trims whitespace from individual model IDs in GEMINI_MODELS", () => {
+      process.env.GEMINI_MODELS = " model-a , model-b ";
+      const data = parseContents(readResource("gemini://models")) as {
+        models: Array<{ id: string }>;
+        total: number;
+        source: string;
+      };
+      expect(data.source).toBe("custom");
+      expect(data.total).toBe(2);
+      expect(data.models.map((m) => m.id)).toEqual(["model-a", "model-b"]);
+    });
+
+    it("returns empty custom list when GEMINI_MODELS contains only whitespace and commas", () => {
+      process.env.GEMINI_MODELS = " , , ";
+      const data = parseContents(readResource("gemini://models")) as {
+        models: unknown[];
+        total: number;
+        source: string;
+      };
+      expect(data.source).toBe("custom");
+      expect(data.total).toBe(0);
+      expect(data.models).toEqual([]);
+    });
+
     it("preserves URI and mimeType in contents", () => {
       const result = readResource("gemini://models");
       expect(result.contents[0].uri).toBe("gemini://models");
