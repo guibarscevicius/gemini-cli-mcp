@@ -58,6 +58,21 @@ const DEPTH_PREAMBLES = {
 
 const DEEP_WAIT_MS = 180_000;
 
+/**
+ * Run a research query using Gemini's grounding/web-search preamble.
+ *
+ * Three depth presets gate the prompt preamble: `quick` (existing knowledge,
+ * minimal search), `standard` (default — verify facts via web search), and
+ * `deep` (multi-source cross-referenced report).
+ *
+ * Wait semantics:
+ *  - `wait: true` (default) → block until the CLI returns, subject to
+ *    `waitTimeoutMs`. Default timeout is 90 s for quick/standard, 180 s for
+ *    deep (see {@link DEEP_WAIT_MS}). On timeout, returns `partialResponse`
+ *    + `timedOut: true` while the job continues running asynchronously.
+ *  - `wait: false` → returns `{ jobId, pollIntervalMs }` immediately; poll
+ *    with `gemini-poll` or cancel with `gemini-cancel`.
+ */
 export async function geminiResearch(
   input: unknown,
   ctx: ToolCallContext = {}

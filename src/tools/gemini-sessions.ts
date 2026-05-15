@@ -46,6 +46,18 @@ export interface GeminiSessionsExportOutput {
 
 export type GeminiSessionsOutput = GeminiSessionsListOutput | GeminiSessionsExportOutput;
 
+/**
+ * Discriminated tool: behavior depends on whether `sessionId` is present.
+ *
+ *  - `sessionId` **omitted** → returns the list of sessions in the store
+ *    (id, createdAt, updatedAt, turnCount, …).
+ *  - `sessionId` **provided** → returns the full conversation export for
+ *    that session, formatted as `json` (default) or `markdown`; `lastN`
+ *    truncates to the most-recent N turn-pairs.
+ *
+ * Consolidates the former `gemini-list-sessions` and `gemini-export` tools
+ * removed in PR #114.
+ */
 export async function geminiSessions(input: unknown): Promise<GeminiSessionsOutput> {
   const { sessionId, format, lastN } = GeminiSessionsSchema.parse(input ?? {});
 

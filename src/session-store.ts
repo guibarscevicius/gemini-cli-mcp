@@ -20,6 +20,21 @@ export interface FormattedHistory {
   totalTurns: number;
 }
 
+/**
+ * SQLite-backed multi-turn session store using `node:sqlite` (DatabaseSync).
+ * Persists conversation history across MCP requests so the `gemini-reply` tool
+ * can continue a thread by `sessionId`.
+ *
+ * Lifecycle:
+ *  - DB path is taken from `GEMINI_SESSION_DB` (defaults to
+ *    `~/.gemini-cli-mcp/sessions.db`; `:memory:` for ephemeral test runs).
+ *  - A background GC timer (`GEMINI_JOB_GC_MS`) deletes sessions older than
+ *    their TTL on a sliding-window basis.
+ *  - History exposed to the model is bounded by `GEMINI_MAX_HISTORY_TURNS`
+ *    (turn-pairs; `0` = unlimited) — see {@link formatHistory}.
+ *  - In-flight async jobs are tracked in {@link pendingJobs} to wire
+ *    `gemini-cancel` per session.
+ */
 export class SessionStore {
   private db: DatabaseSync;
   private gcTimer: ReturnType<typeof setInterval>;

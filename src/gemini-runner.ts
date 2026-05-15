@@ -440,9 +440,23 @@ export function runWithWarmProcess(
 /**
  * Spawn `gemini` with `--output-format stream-json` and parse NDJSON events.
  *
- * Parses `message` events (role=assistant) into chunks, waits for
- * a `result` event to signal completion, and handles error/process-level failures.
+ * Parses `message` events (role=assistant) into chunks, waits for a `result`
+ * event to signal completion, and handles error/process-level failures.
  * Returns a `ChildProcess` so callers can store it for cancellation.
+ *
+ * Callback contract: `onChunk`, `onDone`, and `onError` are mutually exclusive
+ * once a terminal outcome is reached. An internal `settled` flag (see `settle()`
+ * below) ensures only the first of `onDone`/`onError` runs and that no further
+ * `onChunk` fires after settlement.
+ *
+ * @param args      Argv array for the gemini CLI (no shell expansion).
+ * @param spawnOpts `env` is merged with {@link GEMINI_CHILD_ENV_OVERRIDES};
+ *                  `timeout` is enforced via internal `setTimeout` that kills
+ *                  the process group on expiry.
+ * @param onChunk   Called per assistant message event with the new text fragment.
+ * @param onDone    Called once with the accumulated text when the CLI emits a
+ *                  `result` event.
+ * @param onError   Called once with a spawn/parse/timeout failure.
  */
 export function spawnGemini(
   args: string[],
@@ -577,7 +591,9 @@ const defaultExecutor: GeminiExecutor = (args, opts, onChunk) =>
  * Runs `gemini` as a subprocess with no shell interpolation.
  *
  * Security properties (mitigates CVE-2026-0755-class command injection):
- *  - execFile() passes args directly to execve() — no shell, no metacharacter risk
+ *  - `child_process.spawn` is invoked with an argv array (via `spawnInGroup`
+ *    → `spawnGemini`); the shell is never involved, so metacharacters in
+ *    user input cannot be reinterpreted by /bin/sh.
  *  - args array is built programmatically, never string-concatenated
  *  - env is restricted to HOME and PATH only; all other inherited env vars
  *    (API keys, tokens, secrets) are stripped. Note: HOME is required for
@@ -585,6 +601,17 @@ const defaultExecutor: GeminiExecutor = (args, opts, onChunk) =>
  *    sandbox boundary.
  *  - --yolo auto-approves Gemini's own tool use (prevents hanging in non-interactive mode)
  *  - --output-format stream-json gives structured, parseable NDJSON output
+ *
+ * @param prompt    User prompt; `@file` references are expanded in-place when
+ *                  the heuristic in {@link prepareLargePrompt} fires.
+ * @param opts      Optional {@link GeminiOptions} (model, cwd, timeout, …).
+ * @param executor  Override the spawn path. Defaults to `defaultExecutor`,
+ *                  which calls {@link spawnGemini}. Tests substitute this to
+ *                  inject deterministic streams.
+ * @param onChunk   Streams assistant message fragments as they arrive.
+ * @param lifecycle Extension point used by `tools/shared.ts:runGeminiAsync`
+ *                  to capture the live `ChildProcess` for cancellation and
+ *                  to be notified when the subprocess exits.
  */
 export async function runGemini(
   prompt: string,
