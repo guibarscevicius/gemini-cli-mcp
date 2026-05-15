@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.8.0...gemini-cli-mcp-v0.9.0) (2026-05-10)
 
 
+### ⚠ BREAKING CHANGES
+
+* **tools:** Removed `gemini-list-models` — replaced by the `gemini://models` MCP resource (see [#114](https://github.com/guibarscevicius/gemini-cli-mcp/pull/114)).
+* **tools:** Removed `gemini-list-sessions` — consolidated into `gemini-sessions` (omit `sessionId` to list).
+* **tools:** Removed `gemini-export` — consolidated into `gemini-sessions` (provide `sessionId` to export).
+
+
 ### Features
 
 * **warm-pool:** bound per-instance cost — lower default size + idle eviction ([#112](https://github.com/guibarscevicius/gemini-cli-mcp/issues/112)) ([1da0627](https://github.com/guibarscevicius/gemini-cli-mcp/commit/1da0627310ba450dfe4bfbf18dfa17a179070736))
