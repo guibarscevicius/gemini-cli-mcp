@@ -50,7 +50,7 @@ Use `mcp__gemini-dev__*` tools (not `mcp__gemini__*` which hit the installed rel
 ## Environment variables (all optional)
 | Variable | Default | Description |
 |---|---|---|
-| `GEMINI_MAX_RETRIES` | `3` | Auto-retries on empty-stdout/429/ETIMEDOUT |
+| `GEMINI_MAX_RETRIES` | `3` | Auto-retries on empty-stdout/429/ETIMEDOUT. `0` = disabled. |
 | `GEMINI_RETRY_BASE_MS` | `1000` | Base delay for first retry (exponential backoff) |
 | `GEMINI_MAX_CONCURRENT` | `2` | Max parallel Gemini subprocesses |
 | `GEMINI_QUEUE_TIMEOUT_MS` | `60000` | Concurrency slot wait timeout (ms) |
