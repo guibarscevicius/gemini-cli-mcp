@@ -13,6 +13,8 @@ export interface Job {
   subprocess?: ChildProcess; // for cancel (cleared on completion)
   createdAt: number;
   readonly completion: Promise<string>;
+  historyPersisted?: false;  // set to false when appendTurn threw post-response; absent on success
+  historyError?: string;     // set alongside historyPersisted when persistence threw
 }
 
 const JOB_TTL_MS = parseInt(process.env.GEMINI_JOB_TTL_MS ?? "300000", 10);
@@ -93,12 +95,20 @@ export function appendChunk(jobId: string, chunk: string): void {
   }
 }
 
-export function completeJob(jobId: string, response: string): void {
+export function completeJob(
+  jobId: string,
+  response: string,
+  history?: { persisted: boolean; error?: string }
+): void {
   const job = jobs.get(jobId);
   if (job && job.status !== "cancelled") {
     job.status = "done";
     job.response = response;
     job.subprocess = undefined;
+    if (history && !history.persisted) {
+      job.historyPersisted = false;
+      job.historyError = history.error;
+    }
     job._resolve(response);
     _jobListChangedCb?.();
   }

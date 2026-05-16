@@ -48,6 +48,36 @@ describe("geminiPoll", () => {
     expect(result.partialResponse).toBeUndefined();
   });
 
+  it("surfaces historyPersisted and historyError when persistence failed (issue #122)", async () => {
+    mockGetJob.mockReturnValue({
+      status: "done",
+      partialResponse: "",
+      response: "final answer",
+      historyPersisted: false,
+      historyError: "SQLite: appendTurn ROLLBACK",
+      createdAt: Date.now(),
+    });
+    const result = await geminiPoll({ jobId: VALID_JOB_ID });
+    expect(result).toMatchObject({
+      status: "done",
+      response: "final answer",
+      historyPersisted: false,
+      historyError: "SQLite: appendTurn ROLLBACK",
+    });
+  });
+
+  it("omits historyPersisted on done happy path (issue #122)", async () => {
+    mockGetJob.mockReturnValue({
+      status: "done",
+      partialResponse: "",
+      response: "final answer",
+      createdAt: Date.now(),
+    });
+    const result = await geminiPoll({ jobId: VALID_JOB_ID });
+    expect(result).not.toHaveProperty("historyPersisted");
+    expect(result).not.toHaveProperty("historyError");
+  });
+
   it("returns error status with error message", async () => {
     mockGetJob.mockReturnValue({
       status: "error",

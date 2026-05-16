@@ -200,7 +200,11 @@ describe("geminiReply", () => {
   it("completes job and appends turns after runGemini resolves", async () => {
     const { jobId } = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q" });
     await flush();
-    expect(mockJobStore.completeJob).toHaveBeenCalledWith(jobId, "Gemini follow-up response.");
+    expect(mockJobStore.completeJob).toHaveBeenCalledWith(
+      jobId,
+      "Gemini follow-up response.",
+      { persisted: true, error: undefined }
+    );
     expect(mockStore.appendTurn).toHaveBeenCalledWith(VALID_SESSION_ID, "user", "q");
     expect(mockStore.appendTurn).toHaveBeenCalledWith(VALID_SESSION_ID, "assistant", "Gemini follow-up response.");
     expect(mockStore.clearPendingJob).toHaveBeenCalledWith(VALID_SESSION_ID);
@@ -225,6 +229,50 @@ describe("geminiReply", () => {
     await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q" });
     await flush();
     expect(mockStore.clearPendingJob).toHaveBeenCalledWith(VALID_SESSION_ID);
+  });
+
+  // ── #122: surface historyPersisted on appendTurn failure ──────────────────
+
+  it("appendTurn failure passes { persisted: false, error } to completeJob (issue #122)", async () => {
+    mockStore.appendTurn.mockImplementation(() => {
+      throw new Error("SQLite: appendTurn ROLLBACK");
+    });
+    const { jobId } = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q" });
+    await flush();
+    expect(mockJobStore.completeJob).toHaveBeenCalledWith(
+      jobId,
+      "Gemini follow-up response.",
+      { persisted: false, error: "SQLite: appendTurn ROLLBACK" }
+    );
+  });
+
+  it("wait: true surfaces historyPersisted: false when persistence threw (issue #122)", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("waited reply"),
+      historyPersisted: false,
+      historyError: "SQLite: appendTurn ROLLBACK",
+    });
+    const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q", wait: true });
+    expect(result).toMatchObject({
+      response: "waited reply",
+      historyPersisted: false,
+      historyError: "SQLite: appendTurn ROLLBACK",
+    });
+  });
+
+  it("wait: true omits historyPersisted on happy path (issue #122)", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("waited reply"),
+    });
+    const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q", wait: true });
+    expect(result).not.toHaveProperty("historyPersisted");
+    expect(result).not.toHaveProperty("historyError");
   });
 
   // ── History prepending ───────────────────────────────────────────────────────

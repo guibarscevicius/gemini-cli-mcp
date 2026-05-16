@@ -8,7 +8,7 @@ export const GeminiPollSchema = z.object({
 
 export type GeminiPollOutput =
   | { status: "pending"; partialResponse: string }
-  | { status: "done"; response: string }
+  | { status: "done"; response: string; historyPersisted?: false; historyError?: string }
   | { status: "error"; error: string }
   | { status: "cancelled"; error?: string };
 
@@ -24,8 +24,14 @@ export async function geminiPoll(input: unknown): Promise<GeminiPollOutput> {
   switch (job.status) {
     case "pending":
       return { status: "pending", partialResponse: job.partialResponse };
-    case "done":
-      return { status: "done", response: job.response! };
+    case "done": {
+      const out: GeminiPollOutput = { status: "done", response: job.response! };
+      if (job.historyPersisted === false) {
+        out.historyPersisted = false;
+        if (job.historyError !== undefined) out.historyError = job.historyError;
+      }
+      return out;
+    }
     case "error":
       return { status: "error", error: job.error! };
     case "cancelled":
@@ -59,6 +65,8 @@ export const geminiPollToolDefinition: Tool = {
       partialResponse: { type: "string" },
       response: { type: "string" },
       error: { type: "string" },
+      historyPersisted: { type: "boolean" },
+      historyError: { type: "string" },
     },
     required: ["status"],
   },
