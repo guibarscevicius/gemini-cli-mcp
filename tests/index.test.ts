@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { ChildProcess } from "node:child_process";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -8,8 +9,17 @@ vi.mock("../src/dispatcher.js", () => ({
   handleCallTool: vi.fn(),
 }));
 
+vi.mock("../src/process-group.js", () => ({
+  killGroup: vi.fn(() => true),
+  spawnInGroup: vi.fn(),
+  setupSubreaper: vi.fn(),
+}));
+
 import { handleCallTool } from "../src/dispatcher.js";
-import { createServer, registerToolHandlers, registerShutdownHandlers, startServer } from "../src/index.js";
+import { createServer, registerToolHandlers, registerShutdownHandlers, startServer, handleCancelledNotification } from "../src/index.js";
+import { killGroup } from "../src/process-group.js";
+import * as jobStore from "../src/job-store.js";
+import { registerRequest, clearMap, getJobByRequestId } from "../src/request-map.js";
 import { _resetMcpLogger } from "../src/logging.js";
 import { STATIC_RESOURCES, RESOURCE_TEMPLATES } from "../src/resources.js";
 import { askGeminiToolDefinition } from "../src/tools/ask-gemini.js";
@@ -236,6 +246,71 @@ describe("registerShutdownHandlers", () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledWith("stdin end");
     restore();
+  });
+});
+
+describe("handleCancelledNotification", () => {
+  const killGroupMock = vi.mocked(killGroup);
+
+  beforeEach(() => {
+    jobStore.clearJobs();
+    clearMap();
+    killGroupMock.mockClear();
+  });
+
+  it("kills running subprocess and cancels job (issue #120)", () => {
+    const jobId = "11111111-1111-1111-1111-111111111111";
+    const requestId = 42;
+    jobStore.createJob(jobId);
+    const job = jobStore.getJob(jobId) as ReturnType<typeof jobStore.getJob> & {
+      subprocess?: ChildProcess;
+    };
+    const mockSubprocess = { pid: 9999, kill: vi.fn() } as unknown as ChildProcess;
+    job!.subprocess = mockSubprocess;
+    registerRequest(requestId, jobId);
+
+    handleCancelledNotification({ requestId });
+
+    expect(killGroupMock).toHaveBeenCalledWith(mockSubprocess, "SIGTERM");
+    expect(jobStore.getJob(jobId)?.status).toBe("cancelled");
+    expect(getJobByRequestId(requestId)).toBeUndefined();
+  });
+
+  it("cancels job without calling killGroup when subprocess has not yet spawned", () => {
+    const jobId = "22222222-2222-2222-2222-222222222222";
+    const requestId = 43;
+    jobStore.createJob(jobId);
+    registerRequest(requestId, jobId);
+
+    handleCancelledNotification({ requestId });
+
+    expect(killGroupMock).not.toHaveBeenCalled();
+    expect(jobStore.getJob(jobId)?.status).toBe("cancelled");
+    expect(getJobByRequestId(requestId)).toBeUndefined();
+  });
+
+  it("is a no-op when job is already done", () => {
+    const jobId = "33333333-3333-3333-3333-333333333333";
+    const requestId = 44;
+    jobStore.createJob(jobId);
+    jobStore.completeJob(jobId, "response");
+    registerRequest(requestId, jobId);
+
+    handleCancelledNotification({ requestId });
+
+    expect(killGroupMock).not.toHaveBeenCalled();
+    expect(jobStore.getJob(jobId)?.status).toBe("done");
+    expect(getJobByRequestId(requestId)).toBeUndefined();
+  });
+
+  it("ignores notification with no requestId", () => {
+    handleCancelledNotification({});
+    expect(killGroupMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores notification when requestId has no registered job", () => {
+    handleCancelledNotification({ requestId: 999 });
+    expect(killGroupMock).not.toHaveBeenCalled();
   });
 });
 
