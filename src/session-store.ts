@@ -28,8 +28,10 @@ export interface FormattedHistory {
  * Lifecycle:
  *  - DB path is taken from `GEMINI_SESSION_DB` (defaults to
  *    `~/.gemini-cli-mcp/sessions.db`; `:memory:` for ephemeral test runs).
- *  - A background GC timer (`GEMINI_JOB_GC_MS`) deletes sessions older than
- *    their TTL on a sliding-window basis.
+ *  - A background GC timer (fixed `GC_INTERVAL_MS`, 5 min; not env-tunable)
+ *    deletes sessions whose `last_accessed` is older than `SESSION_TTL_MS`
+ *    (1 h, also fixed) on a sliding-window basis — every read/write touches
+ *    `last_accessed`.
  *  - History exposed to the model is bounded by `GEMINI_MAX_HISTORY_TURNS`
  *    (turn-pairs; `0` = unlimited) — see {@link formatHistory}.
  *  - In-flight async jobs are tracked in {@link pendingJobs} to wire

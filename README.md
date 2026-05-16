@@ -46,7 +46,7 @@ The wizard will:
 
 | Property | Implementation |
 |----------|----------------|
-| No shell injection | `execFile()` passes args as an array directly to `execve` — no shell is invoked |
+| No shell injection | `spawn()` (via `spawnInGroup`) passes args as an array directly to `execve` — no shell is invoked |
 | No arg concatenation | Args array is built programmatically; user input is always a single element |
 | Env isolation | Subprocess inherits only `HOME` and `PATH` |
 | Structured output | `--output-format stream-json` produces reliable streaming NDJSON |

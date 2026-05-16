@@ -132,9 +132,11 @@ if (POOL_ENABLED && !SETUP_MODE) {
       `[gemini-cli-mcp] first run detected — increased pool startup to ${effectiveStartupMs}ms\n`
     );
   }
-  // The args here MUST match the orphan-reaper signature on line 183 and
-  // PGREP_PATTERN in scripts/verify-pool-logic.mjs. If you change them, update
-  // all three sites — there's no automated coupling.
+  // The args here MUST match the `reapOrphans` signature above (the
+  // `["--yolo", "--output-format", "stream-json"]` array at the
+  // `reapOrphans({ signature: ... })` call near the top of this file) and
+  // PGREP_PATTERN in scripts/verify-pool-logic.mjs. If you change them,
+  // update all three sites — there's no automated coupling.
   warmPool = new WarmProcessPool(
     POOL_SIZE,
     ["--yolo", "--output-format", "stream-json"],
@@ -603,8 +605,11 @@ const defaultExecutor: GeminiExecutor = (args, opts, onChunk) =>
  *  - --output-format stream-json gives structured, parseable NDJSON output
  *
  * @param prompt    User prompt; `@file` references are expanded in-place when
- *                  the heuristic in {@link prepareLargePrompt} fires.
- * @param opts      Optional {@link GeminiOptions} (model, cwd, timeout, …).
+ *                  the prompt exceeds `LARGE_PROMPT_THRESHOLD` (see
+ *                  `src/prompt-prep.ts`).
+ * @param opts      Optional {@link GeminiOptions} (model, cwd, tool,
+ *                  sessionId, expandRefs). Per-call timeout is not
+ *                  configurable — `TIMEOUT_MS` is a module constant.
  * @param executor  Override the spawn path. Defaults to `defaultExecutor`,
  *                  which calls {@link spawnGemini}. Tests substitute this to
  *                  inject deterministic streams.
