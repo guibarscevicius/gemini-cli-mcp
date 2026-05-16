@@ -144,19 +144,19 @@ export class SessionStore {
   }
 
   appendTurn(id: string, role: TurnRole, content: string): void {
-    this.db.exec("BEGIN");
-    try {
-      const row = this.stmtGetTurns.get(id) as { turns: string } | undefined;
-      if (!row) {
-        throw new Error(`appendTurn: session ${id} not found`);
-      }
-      const turns: Turn[] = JSON.parse(row.turns);
-      turns.push({ role, content });
-      this.stmtUpdateTurns.run(JSON.stringify(turns), Date.now(), id);
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
+    // SELECT + UPDATE without a wrapping transaction: a single UPDATE is already
+    // atomic in SQLite, and the BEGIN/ROLLBACK pair confused the historyError
+    // surface by replacing the primary throw with a secondary "no transaction
+    // is active" message under cross-connection mutation (issue #122 integration).
+    const row = this.stmtGetTurns.get(id) as { turns: string } | undefined;
+    if (!row) {
+      throw new Error(`appendTurn: session ${id} not found`);
+    }
+    const turns: Turn[] = JSON.parse(row.turns);
+    turns.push({ role, content });
+    const result = this.stmtUpdateTurns.run(JSON.stringify(turns), Date.now(), id);
+    if (result.changes === 0) {
+      throw new Error(`appendTurn: session ${id} disappeared during update`);
     }
   }
 
