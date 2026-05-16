@@ -1512,7 +1512,8 @@ describe("spawnGemini — NDJSON parsing", () => {
     expect(err.message).toContain("exited with code 1");
   });
 
-  it("skips non-JSON lines without throwing", async () => {
+  it("skips non-JSON lines without throwing, logging them to stderr", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const result = await new Promise<string>((resolve, reject) => {
       const cp = spawnGemini(
         [],
@@ -1533,6 +1534,12 @@ describe("spawnGemini — NDJSON parsing", () => {
     });
 
     expect(result).toBe("ok");
+
+    // Issue #121: dropped non-JSON lines must surface to stderr regardless of
+    // GEMINI_STRUCTURED_LOGS — the test env does not set it.
+    const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toContain("non-JSON stdout line dropped: this is debug output, not JSON");
+    stderrSpy.mockRestore();
   });
 
   it("only accumulates assistant messages (not user or tool messages)", async () => {

@@ -31,6 +31,15 @@ export class GeminiOutputError extends Error {
 // 300 s - allows Gemini 2.5 Pro deep-reasoning tasks (can take 2–3 min before first token)
 const TIMEOUT_MS = 300_000;
 
+// Non-JSON stdout from the CLI carries diagnostics the JSON stream cannot:
+// startup errors, OAuth prompts, version-mismatch warnings, usage errors.
+// Logged unconditionally (not gated on GEMINI_STRUCTURED_LOGS) so these surface
+// in default config when the CLI emits no JSON at all.
+function logSkippedNonJsonLine(line: string): void {
+  const truncated = line.length > 200 ? `${line.slice(0, 200)}…` : line;
+  process.stderr.write(`[gemini-cli-mcp] non-JSON stdout line dropped: ${truncated}\n`);
+}
+
 // ── Warm process pool ──────────────────────────────────────────────────────
 // Pre-spawns Gemini processes so the ~12–17 s cold-start cost is paid in advance.
 // Requests with a custom --model fall back to cold spawn (pool processes use
@@ -369,11 +378,7 @@ export function runWithWarmProcess(
         try {
           event = JSON.parse(trimmed);
         } catch {
-          if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
-            process.stderr.write(
-              `[gemini-cli-mcp] skipped non-JSON line: ${trimmed.slice(0, 120)}\n`
-            );
-          }
+          logSkippedNonJsonLine(trimmed);
           continue;
         }
 
@@ -508,11 +513,7 @@ export function spawnGemini(
       try {
         event = JSON.parse(trimmed);
       } catch {
-        if (process.env.GEMINI_STRUCTURED_LOGS === "1") {
-          process.stderr.write(
-            `[gemini-cli-mcp] skipped non-JSON line: ${trimmed.slice(0, 120)}\n`
-          );
-        }
+        logSkippedNonJsonLine(trimmed);
         continue;
       }
 

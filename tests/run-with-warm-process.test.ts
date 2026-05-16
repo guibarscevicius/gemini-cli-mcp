@@ -107,7 +107,8 @@ describe("runWithWarmProcess", () => {
     await expect(promise).resolves.toBe("hello");
   });
 
-  it("ignores non-JSON lines and empty lines in stdout", async () => {
+  it("ignores non-JSON lines and empty lines in stdout, logging the dropped line to stderr", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const { wp, emitData, emitClose } = makeWarmProcess();
     const promise = runWithWarmProcess(wp, "hi", 5000, undefined);
 
@@ -118,6 +119,12 @@ describe("runWithWarmProcess", () => {
     emitClose(0);
 
     await expect(promise).resolves.toBe("ok");
+
+    // Issue #121: dropped non-JSON lines must surface to stderr regardless of
+    // GEMINI_STRUCTURED_LOGS — the test env does not set it.
+    const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toContain("non-JSON stdout line dropped: not json");
+    stderrSpy.mockRestore();
   });
 
   it("writes prompt + newline to stdin and calls end()", async () => {
