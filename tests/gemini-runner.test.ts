@@ -1512,7 +1512,8 @@ describe("spawnGemini — NDJSON parsing", () => {
     expect(err.message).toContain("exited with code 1");
   });
 
-  it("skips non-JSON lines without throwing", async () => {
+  it("skips non-JSON lines without throwing, logging them to stderr", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const result = await new Promise<string>((resolve, reject) => {
       const cp = spawnGemini(
         [],
@@ -1533,6 +1534,36 @@ describe("spawnGemini — NDJSON parsing", () => {
     });
 
     expect(result).toBe("ok");
+
+    // This stderr log fires unconditionally — not gated on GEMINI_STRUCTURED_LOGS —
+    // so non-JSON CLI lines surface in the default server config (env unset here).
+    const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toContain("non-JSON stdout line dropped: this is debug output, not JSON");
+    stderrSpy.mockRestore();
+  });
+
+  it("truncates non-JSON lines longer than 200 chars with a trailing ellipsis", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const longLine = "x".repeat(300);
+    await new Promise<string>((resolve, reject) => {
+      const cp = spawnGemini(
+        [],
+        { env: { HOME: "/home/test", PATH: "/usr/bin" }, timeout: 5000 },
+        () => {},
+        resolve,
+        reject
+      );
+      const lines = [
+        longLine,
+        JSON.stringify({ type: "result", status: "success" }),
+      ].join("\n") + "\n";
+      (cp as unknown as { stdout: EventEmitter }).stdout.emit("data", Buffer.from(lines));
+      (cp as unknown as EventEmitter).emit("close", 0);
+    });
+    const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toContain(`non-JSON stdout line dropped: ${"x".repeat(200)}…`);
+    expect(output).not.toContain("x".repeat(201));
+    stderrSpy.mockRestore();
   });
 
   it("only accumulates assistant messages (not user or tool messages)", async () => {

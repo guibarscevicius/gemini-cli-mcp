@@ -48,6 +48,8 @@ export interface AskGeminiOutput {
   response?: string;
   partialResponse?: string;
   timedOut?: boolean;
+  historyPersisted?: false;
+  historyError?: string;
 }
 
 /**
@@ -84,18 +86,22 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
   // This .then/.catch chain always owns request-map cleanup.
   runGeminiAsync(jobId, prompt, { model, cwd: effectiveCwd, tool: "ask-gemini", expandRefs }, ctx)
     .then((response) => {
-      jobStore.completeJob(jobId, response);
+      // Persist before completing so an appendTurn failure is captured on the
+      // job and surfaced through historyPersisted to wait/poll callers, instead
+      // of arriving after completeJob has already unblocked them.
+      let history: jobStore.CompletionHistory = { persisted: true };
       try {
         sessionStore.appendTurn(sessionId, "user", prompt);
         sessionStore.appendTurn(sessionId, "assistant", response);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const error = err instanceof Error ? err.message : String(err);
+        history = { persisted: false, error };
         process.stderr.write(
-          `[gemini-cli-mcp] session ${sessionId} history update failed (non-fatal): ${msg}\n`
+          `[gemini-cli-mcp] session ${sessionId} history update failed: ${error}\n`
         );
-      } finally {
-        sessionStore.clearPendingJob(sessionId);
       }
+      sessionStore.clearPendingJob(sessionId);
+      jobStore.completeJob(jobId, response, history);
       if (ctx.requestId !== undefined) {
         unregisterRequest(ctx.requestId);
       }
@@ -129,7 +135,12 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
         if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
         return { jobId, sessionId, partialResponse: result.partialResponse, timedOut: true, pollIntervalMs: 2000 };
       }
-      return { jobId, sessionId, response: result.response, pollIntervalMs: 2000 };
+      const out: AskGeminiOutput = { jobId, sessionId, response: result.response, pollIntervalMs: 2000 };
+      if (result.historyPersisted === false) {
+        out.historyPersisted = false;
+        if (result.historyError !== undefined) out.historyError = result.historyError;
+      }
+      return out;
     } catch (err) {
       // Stop the background onChunk from sending further notifications after the
       // tool call returns. Works because onChunk checks ctx.progressToken before sending.
@@ -193,6 +204,8 @@ export const askGeminiToolDefinition: Tool = {
       response: { type: "string" },
       partialResponse: { type: "string" },
       timedOut: { type: "boolean" },
+      historyPersisted: { type: "boolean", const: false },
+      historyError: { type: "string" },
     },
     required: ["jobId", "sessionId", "pollIntervalMs"],
   },

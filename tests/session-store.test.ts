@@ -60,10 +60,11 @@ describe("SessionStore", () => {
     expect(totalTurns).toBe(4);
   });
 
-  it("appendTurn on non-existent session drops the turn and leaves store consistent", () => {
+  it("appendTurn on non-existent session throws and leaves store consistent", () => {
     const id = "rollback-test";
     store.create(id);
-    store.appendTurn("ghost-session", "user", "should be dropped");
+    expect(() => store.appendTurn("ghost-session", "user", "should be dropped"))
+      .toThrowError(/session ghost-session not found/);
     store.appendTurn(id, "user", "should work");
     store.appendTurn(id, "assistant", "response");
     const { history } = store.formatHistory(id);
@@ -121,14 +122,16 @@ describe("SessionStore", () => {
     expect(history).toContain("Assistant: assistant-25");
   });
 
-  it("formatHistory() returns empty history for corrupt session JSON", () => {
+  it("formatHistory() throws on corrupt session JSON (issue #119)", () => {
     const id = "session-corrupt-history";
     store.create(id);
     (store as unknown as { db: { exec: (sql: string) => void } }).db.exec(
       "UPDATE sessions SET turns = 'not-json' WHERE id = 'session-corrupt-history'"
     );
 
-    expect(store.formatHistory(id)).toEqual({ history: "", truncated: false, totalTurns: 0 });
+    expect(() => store.formatHistory(id)).toThrow(
+      `Session ${id} has corrupt turn data`
+    );
   });
 
   it("SQLite persistence round-trip", () => {

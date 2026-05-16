@@ -200,7 +200,11 @@ describe("geminiReply", () => {
   it("completes job and appends turns after runGemini resolves", async () => {
     const { jobId } = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q" });
     await flush();
-    expect(mockJobStore.completeJob).toHaveBeenCalledWith(jobId, "Gemini follow-up response.");
+    expect(mockJobStore.completeJob).toHaveBeenCalledWith(
+      jobId,
+      "Gemini follow-up response.",
+      { persisted: true, error: undefined }
+    );
     expect(mockStore.appendTurn).toHaveBeenCalledWith(VALID_SESSION_ID, "user", "q");
     expect(mockStore.appendTurn).toHaveBeenCalledWith(VALID_SESSION_ID, "assistant", "Gemini follow-up response.");
     expect(mockStore.clearPendingJob).toHaveBeenCalledWith(VALID_SESSION_ID);
@@ -225,6 +229,51 @@ describe("geminiReply", () => {
     await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q" });
     await flush();
     expect(mockStore.clearPendingJob).toHaveBeenCalledWith(VALID_SESSION_ID);
+  });
+
+  it("appendTurn failure passes { persisted: false, error } to completeJob (issue #122)", async () => {
+    mockStore.appendTurn.mockImplementation(() => {
+      throw new Error("SQLite: appendTurn ROLLBACK");
+    });
+    const { jobId } = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q" });
+    await flush();
+    expect(mockJobStore.completeJob).toHaveBeenCalledWith(
+      jobId,
+      "Gemini follow-up response.",
+      { persisted: false, error: "SQLite: appendTurn ROLLBACK" }
+    );
+    // clearPendingJob must still run even when persistence threw, otherwise
+    // the session stays pinned to a job that has already resolved.
+    expect(mockStore.clearPendingJob).toHaveBeenCalledWith(VALID_SESSION_ID);
+  });
+
+  it("wait: true surfaces historyPersisted: false when persistence threw (issue #122)", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("waited reply"),
+      historyPersisted: false,
+      historyError: "SQLite: appendTurn ROLLBACK",
+    });
+    const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q", wait: true });
+    expect(result).toMatchObject({
+      response: "waited reply",
+      historyPersisted: false,
+      historyError: "SQLite: appendTurn ROLLBACK",
+    });
+  });
+
+  it("wait: true omits historyPersisted on happy path (issue #122)", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("waited reply"),
+    });
+    const result = await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "q", wait: true });
+    expect(result).not.toHaveProperty("historyPersisted");
+    expect(result).not.toHaveProperty("historyError");
   });
 
   // ── History prepending ───────────────────────────────────────────────────────
@@ -260,6 +309,16 @@ describe("geminiReply", () => {
   it("formats history using the session ID, not the prompt", async () => {
     await geminiReply({ sessionId: VALID_SESSION_ID, prompt: "new question" });
     expect(mockStore.formatHistory).toHaveBeenCalledWith(VALID_SESSION_ID);
+  });
+
+  it("propagates formatHistory throw to the caller as a rejected promise (issue #119)", async () => {
+    mockStore.formatHistory.mockImplementation(() => {
+      throw new Error(`Session ${VALID_SESSION_ID} has corrupt turn data`);
+    });
+    await expect(
+      geminiReply({ sessionId: VALID_SESSION_ID, prompt: "follow up" })
+    ).rejects.toThrow(/corrupt turn data/);
+    expect(mockRunGemini).not.toHaveBeenCalled();
   });
 
   it("passes model option to runGemini when provided", async () => {
@@ -467,8 +526,6 @@ describe("geminiReply", () => {
       message: expect.stringContaining("subprocess crashed"),
     });
   });
-
-  // ── #63: wait:true timeout must unregister to prevent late cancellation ──
 
   it("wait:true timeout unregisters requestId to prevent late cancellation", async () => {
     mockJobStore.getJob.mockReturnValue({

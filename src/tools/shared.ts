@@ -86,6 +86,8 @@ export interface WaitResult {
   response?: string;
   partialResponse?: string;
   timedOut?: boolean;
+  historyPersisted?: false;
+  historyError?: string;
 }
 
 /**
@@ -107,7 +109,12 @@ export async function waitForJob(
   });
   try {
     const response = await Promise.race([job.completion, timer]);
-    return { response };
+    const result: WaitResult = { response };
+    if (job.historyPersisted === false) {
+      result.historyPersisted = false;
+      if (job.historyError !== undefined) result.historyError = job.historyError;
+    }
+    return result;
   } catch (err) {
     if (err === WAIT_TIMEOUT) {
       process.stderr.write(

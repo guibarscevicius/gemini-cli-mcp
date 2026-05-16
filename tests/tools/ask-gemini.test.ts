@@ -139,7 +139,11 @@ describe("askGemini", () => {
   it("calls completeJob with response after runGemini resolves", async () => {
     const { jobId } = await askGemini({ prompt: "hello" });
     await flush();
-    expect(mockJobStore.completeJob).toHaveBeenCalledWith(jobId, "Gemini says hello.");
+    expect(mockJobStore.completeJob).toHaveBeenCalledWith(
+      jobId,
+      "Gemini says hello.",
+      { persisted: true, error: undefined }
+    );
   });
 
   it("appends user and assistant turns after runGemini resolves", async () => {
@@ -335,6 +339,51 @@ describe("askGemini", () => {
     });
   });
 
+  it("appendTurn failure passes { persisted: false, error } to completeJob (issue #122)", async () => {
+    mockStore.appendTurn.mockImplementation(() => {
+      throw new Error("SQLite: appendTurn ROLLBACK");
+    });
+    const { jobId, sessionId } = await askGemini({ prompt: "hello" });
+    await flush();
+    expect(mockJobStore.completeJob).toHaveBeenCalledWith(
+      jobId,
+      "Gemini says hello.",
+      { persisted: false, error: "SQLite: appendTurn ROLLBACK" }
+    );
+    // clearPendingJob must still run even when persistence threw, otherwise
+    // the session stays pinned to a job that has already resolved.
+    expect(mockStore.clearPendingJob).toHaveBeenCalledWith(sessionId);
+  });
+
+  it("wait: true surfaces historyPersisted: false when persistence threw (issue #122)", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("waited response"),
+      historyPersisted: false,
+      historyError: "SQLite: appendTurn ROLLBACK",
+    });
+    const result = await askGemini({ prompt: "hello", wait: true });
+    expect(result).toMatchObject({
+      response: "waited response",
+      historyPersisted: false,
+      historyError: "SQLite: appendTurn ROLLBACK",
+    });
+  });
+
+  it("wait: true omits historyPersisted on happy path (issue #122)", async () => {
+    mockJobStore.getJob.mockReturnValue({
+      status: "pending",
+      partialResponse: "",
+      createdAt: Date.now(),
+      completion: Promise.resolve("waited response"),
+    });
+    const result = await askGemini({ prompt: "hello", wait: true });
+    expect(result).not.toHaveProperty("historyPersisted");
+    expect(result).not.toHaveProperty("historyError");
+  });
+
   it("wait: true returns timedOut with partialResponse on timeout", async () => {
     mockJobStore.getJob.mockReturnValue({
       status: "pending",
@@ -463,8 +512,6 @@ describe("askGemini", () => {
     expect(result).not.toHaveProperty("response");
     expect(result).not.toHaveProperty("partialResponse");
   });
-
-  // ── #63: wait:true timeout must NOT cancel the job ────────────────────────
 
   it("wait:true timeout does NOT call cancelJob", async () => {
     mockJobStore.getJob.mockReturnValue({

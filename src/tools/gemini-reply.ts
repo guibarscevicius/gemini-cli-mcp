@@ -50,6 +50,8 @@ export interface GeminiReplyOutput {
   timedOut?: boolean;
   historyTruncated?: boolean;
   historyTurnCount?: number;
+  historyPersisted?: false;
+  historyError?: string;
 }
 
 /**
@@ -104,18 +106,22 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
   // Fire-and-forget: background job
   runGeminiAsync(jobId, fullPrompt, { model, cwd: effectiveCwd, tool: "gemini-reply", sessionId, expandRefs }, ctx)
     .then((response) => {
-      jobStore.completeJob(jobId, response);
+      // Persist before completing so an appendTurn failure is captured on the
+      // job and surfaced through historyPersisted to wait/poll callers, instead
+      // of arriving after completeJob has already unblocked them.
+      let history: jobStore.CompletionHistory = { persisted: true };
       try {
         sessionStore.appendTurn(sessionId, "user", prompt);
         sessionStore.appendTurn(sessionId, "assistant", response);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const error = err instanceof Error ? err.message : String(err);
+        history = { persisted: false, error };
         process.stderr.write(
-          `[gemini-cli-mcp] session ${sessionId} history update failed (non-fatal): ${msg}\n`
+          `[gemini-cli-mcp] session ${sessionId} history update failed: ${error}\n`
         );
-      } finally {
-        sessionStore.clearPendingJob(sessionId);
       }
+      sessionStore.clearPendingJob(sessionId);
+      jobStore.completeJob(jobId, response, history);
       if (ctx.requestId !== undefined) unregisterRequest(ctx.requestId);
     })
     .catch((err: unknown) => {
@@ -152,13 +158,18 @@ export async function geminiReply(input: unknown, ctx: ToolCallContext = {}): Pr
           historyTurnCount: truncated ? totalTurns : undefined,
         };
       }
-      return {
+      const out: GeminiReplyOutput = {
         jobId,
         response: result.response,
         pollIntervalMs: 2000,
         historyTruncated: truncated || undefined,
         historyTurnCount: truncated ? totalTurns : undefined,
       };
+      if (result.historyPersisted === false) {
+        out.historyPersisted = false;
+        if (result.historyError !== undefined) out.historyError = result.historyError;
+      }
+      return out;
     } catch (err) {
       // Stop the background onChunk from sending further notifications after the
       // tool call returns. Works because onChunk checks ctx.progressToken before sending.
@@ -232,6 +243,8 @@ export const geminiReplyToolDefinition: Tool = {
       timedOut: { type: "boolean" },
       historyTruncated: { type: "boolean" },
       historyTurnCount: { type: "number" },
+      historyPersisted: { type: "boolean", const: false },
+      historyError: { type: "string" },
     },
     required: ["jobId", "pollIntervalMs"],
   },

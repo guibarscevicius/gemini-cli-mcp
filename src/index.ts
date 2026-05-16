@@ -28,6 +28,7 @@ import { geminiResearchToolDefinition } from "./tools/gemini-research.js";
 import { handleCallTool } from "./dispatcher.js";
 import { getJobByRequestId, unregisterRequest } from "./request-map.js";
 import * as jobStore from "./job-store.js";
+import { killGroup } from "./process-group.js";
 import { warmPool } from "./gemini-runner.js";
 import { initMcpLogger, setMcpLogLevel } from "./logging.js";
 import { STATIC_RESOURCES, RESOURCE_TEMPLATES, readResource } from "./resources.js";
@@ -169,30 +170,34 @@ export function createServer(): Server {
   });
   registerToolHandlers(server);
   server.setNotificationHandler(CancelledNotificationSchema, async (notification) => {
-    const requestId = notification.params?.requestId;
-    if (requestId === undefined) {
-      process.stderr.write(
-        "[gemini-cli-mcp] notifications/cancelled with no requestId — ignoring\n"
-      );
-      return;
-    }
-    const jobId = getJobByRequestId(requestId);
-    if (!jobId) {
-      process.stderr.write(`[gemini-cli-mcp] notifications/cancelled: no job registered for requestId ${String(requestId)}\n`);
-      return;
-    }
-    const job = jobStore.getJob(jobId);
-    if (job?.status === "pending") {
-      if (job.subprocess === undefined) {
-        jobStore.cancelJob(jobId);
-      }
-    }
-    if (job && job.status !== "pending") {
-      process.stderr.write(`[gemini-cli-mcp] notifications/cancelled: job ${jobId} already ${job.status} — skipping kill\n`);
-    }
-    unregisterRequest(requestId);
+    handleCancelledNotification(notification.params);
   });
   return server;
+}
+
+export function handleCancelledNotification(params: { requestId?: string | number }): void {
+  const requestId = params?.requestId;
+  if (requestId === undefined) {
+    process.stderr.write(
+      "[gemini-cli-mcp] notifications/cancelled with no requestId — ignoring\n"
+    );
+    return;
+  }
+  const jobId = getJobByRequestId(requestId);
+  if (!jobId) {
+    process.stderr.write(`[gemini-cli-mcp] notifications/cancelled: no job registered for requestId ${String(requestId)}\n`);
+    return;
+  }
+  const job = jobStore.getJob(jobId);
+  if (job?.status === "pending") {
+    if (job.subprocess !== undefined) {
+      killGroup(job.subprocess, "SIGTERM");
+    }
+    jobStore.cancelJob(jobId);
+  } else if (job) {
+    process.stderr.write(`[gemini-cli-mcp] notifications/cancelled: job ${jobId} already ${job.status} — skipping kill\n`);
+  }
+  unregisterRequest(requestId);
 }
 
 const server = createServer();

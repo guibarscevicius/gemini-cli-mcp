@@ -13,6 +13,11 @@ export interface Job {
   subprocess?: ChildProcess; // for cancel (cleared on completion)
   createdAt: number;
   readonly completion: Promise<string>;
+  // Typed as the literal `false` (not `boolean`) so absent ≡ success and the only
+  // defined value is the failure sentinel; consumers must check `=== false`, not
+  // truthiness. Paired with `historyError`, which is only meaningful when this is set.
+  historyPersisted?: false;
+  historyError?: string;
 }
 
 const JOB_TTL_MS = parseInt(process.env.GEMINI_JOB_TTL_MS ?? "300000", 10);
@@ -93,12 +98,24 @@ export function appendChunk(jobId: string, chunk: string): void {
   }
 }
 
-export function completeJob(jobId: string, response: string): void {
+export type CompletionHistory =
+  | { persisted: true }
+  | { persisted: false; error?: string };
+
+export function completeJob(
+  jobId: string,
+  response: string,
+  history?: CompletionHistory
+): void {
   const job = jobs.get(jobId);
   if (job && job.status !== "cancelled") {
     job.status = "done";
     job.response = response;
     job.subprocess = undefined;
+    if (history && !history.persisted) {
+      job.historyPersisted = false;
+      job.historyError = history.error;
+    }
     job._resolve(response);
     _jobListChangedCb?.();
   }
