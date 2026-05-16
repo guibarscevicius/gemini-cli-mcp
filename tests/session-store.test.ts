@@ -121,14 +121,16 @@ describe("SessionStore", () => {
     expect(history).toContain("Assistant: assistant-25");
   });
 
-  it("formatHistory() returns empty history for corrupt session JSON", () => {
+  it("formatHistory() throws on corrupt session JSON (issue #119)", () => {
     const id = "session-corrupt-history";
     store.create(id);
     (store as unknown as { db: { exec: (sql: string) => void } }).db.exec(
       "UPDATE sessions SET turns = 'not-json' WHERE id = 'session-corrupt-history'"
     );
 
-    expect(store.formatHistory(id)).toEqual({ history: "", truncated: false, totalTurns: 0 });
+    expect(() => store.formatHistory(id)).toThrow(
+      `Session ${id} has corrupt turn data`
+    );
   });
 
   it("SQLite persistence round-trip", () => {

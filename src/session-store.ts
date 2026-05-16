@@ -172,7 +172,7 @@ export class SessionStore {
       process.stderr.write(
         `[gemini-cli-mcp] formatHistory: session ${id} has corrupt turn data: ${err instanceof Error ? err.message : String(err)}\n`
       );
-      return { history: "", truncated: false, totalTurns: 0 };
+      throw new Error(`Session ${id} has corrupt turn data`);
     }
     if (allTurns.length === 0) return { history: "", truncated: false, totalTurns: 0 };
 
