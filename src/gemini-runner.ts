@@ -132,9 +132,11 @@ if (POOL_ENABLED && !SETUP_MODE) {
       `[gemini-cli-mcp] first run detected — increased pool startup to ${effectiveStartupMs}ms\n`
     );
   }
-  // The args here MUST match the orphan-reaper signature on line 183 and
-  // PGREP_PATTERN in scripts/verify-pool-logic.mjs. If you change them, update
-  // all three sites — there's no automated coupling.
+  // The args here MUST match the `reapOrphans` signature above (the
+  // `["--yolo", "--output-format", "stream-json"]` array at the
+  // `reapOrphans({ signature: ... })` call near the top of this file) and
+  // PGREP_PATTERN in scripts/verify-pool-logic.mjs. If you change them,
+  // update all three sites — there's no automated coupling.
   warmPool = new WarmProcessPool(
     POOL_SIZE,
     ["--yolo", "--output-format", "stream-json"],
@@ -440,9 +442,23 @@ export function runWithWarmProcess(
 /**
  * Spawn `gemini` with `--output-format stream-json` and parse NDJSON events.
  *
- * Parses `message` events (role=assistant) into chunks, waits for
- * a `result` event to signal completion, and handles error/process-level failures.
+ * Parses `message` events (role=assistant) into chunks, waits for a `result`
+ * event to signal completion, and handles error/process-level failures.
  * Returns a `ChildProcess` so callers can store it for cancellation.
+ *
+ * Callback contract: `onChunk`, `onDone`, and `onError` are mutually exclusive
+ * once a terminal outcome is reached. An internal `settled` flag (see `settle()`
+ * below) ensures only the first of `onDone`/`onError` runs and that no further
+ * `onChunk` fires after settlement.
+ *
+ * @param args      Argv array for the gemini CLI (no shell expansion).
+ * @param spawnOpts `env` is merged with {@link GEMINI_CHILD_ENV_OVERRIDES};
+ *                  `timeout` is enforced via internal `setTimeout` that kills
+ *                  the process group on expiry.
+ * @param onChunk   Called per assistant message event with the new text fragment.
+ * @param onDone    Called once with the accumulated text when the CLI emits a
+ *                  `result` event.
+ * @param onError   Called once with a spawn/parse/timeout failure.
  */
 export function spawnGemini(
   args: string[],
@@ -577,7 +593,9 @@ const defaultExecutor: GeminiExecutor = (args, opts, onChunk) =>
  * Runs `gemini` as a subprocess with no shell interpolation.
  *
  * Security properties (mitigates CVE-2026-0755-class command injection):
- *  - execFile() passes args directly to execve() — no shell, no metacharacter risk
+ *  - `child_process.spawn` is invoked with an argv array (via `spawnInGroup`
+ *    → `spawnGemini`); the shell is never involved, so metacharacters in
+ *    user input cannot be reinterpreted by /bin/sh.
  *  - args array is built programmatically, never string-concatenated
  *  - env is restricted to HOME and PATH only; all other inherited env vars
  *    (API keys, tokens, secrets) are stripped. Note: HOME is required for
@@ -585,6 +603,20 @@ const defaultExecutor: GeminiExecutor = (args, opts, onChunk) =>
  *    sandbox boundary.
  *  - --yolo auto-approves Gemini's own tool use (prevents hanging in non-interactive mode)
  *  - --output-format stream-json gives structured, parseable NDJSON output
+ *
+ * @param prompt    User prompt; `@file` references are expanded in-place when
+ *                  the prompt exceeds `LARGE_PROMPT_THRESHOLD` (see
+ *                  `src/prompt-prep.ts`).
+ * @param opts      Optional {@link GeminiOptions} (model, cwd, tool,
+ *                  sessionId, expandRefs). Per-call timeout is not
+ *                  configurable — `TIMEOUT_MS` is a module constant.
+ * @param executor  Override the spawn path. Defaults to `defaultExecutor`,
+ *                  which calls {@link spawnGemini}. Tests substitute this to
+ *                  inject deterministic streams.
+ * @param onChunk   Streams assistant message fragments as they arrive.
+ * @param lifecycle Extension point used by `tools/shared.ts:runGeminiAsync`
+ *                  to capture the live `ChildProcess` for cancellation and
+ *                  to be notified when the subprocess exits.
  */
 export async function runGemini(
   prompt: string,
@@ -895,57 +927,4 @@ export async function runGemini(
       });
     }
   }
-}
-
-/** @deprecated No longer used — output parsing migrated to inline NDJSON in spawnGemini/runWithWarmProcess. Retained for downstream consumers. */
-export interface GeminiJsonOutput {
-  response?: string;
-  text?: string;
-  content?: string;
-  error?: string;
-}
-
-/** @deprecated No longer used in production — see GeminiJsonOutput. */
-export function parseGeminiOutput(raw: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // If JSON parse fails, the raw stdout shape is unknown — surface it clearly
-    // so the caller (and developer) can see it and update field names.
-    throw new GeminiOutputError(
-      `gemini returned non-JSON output. Raw stdout:\n${raw.slice(0, 2000)}`,
-      "gemini returned non-JSON output"
-    );
-  }
-
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new GeminiOutputError(
-      `gemini process returned unexpected JSON shape (${typeof parsed}): ${raw.slice(0, 200)}`,
-      "gemini process returned unexpected JSON shape"
-    );
-  }
-
-  const output = parsed as GeminiJsonOutput;
-
-  if (output.error) {
-    // Gemini CLI emits "Path not in workspace" for workspace boundary violations.
-    // If this hint stops appearing, check whether the CLI error wording has changed.
-    const workspaceHint = output.error.includes("Path not in workspace")
-      ? " — pass cwd pointing to the project root containing your @file targets"
-      : "";
-    throw new Error(`gemini error: ${output.error}${workspaceHint}`);
-  }
-
-  // Try known field names in priority order
-  const text = output.response ?? output.text ?? output.content;
-  if (typeof text === "string") {
-    return text;
-  }
-
-  // Unknown shape — dump it so the developer can add the correct field name
-  throw new GeminiOutputError(
-    `gemini JSON output has unexpected shape. Parsed object:\n${JSON.stringify(output, null, 2)}`,
-    "gemini JSON output has unexpected shape"
-  );
 }

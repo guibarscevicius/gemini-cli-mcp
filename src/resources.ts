@@ -140,6 +140,22 @@ function readJob(uri: string, jobId: string): ReadResourceResult {
 const SESSION_RE = /^gemini:\/\/sessions\/([^/]+)$/;
 const JOB_RE = /^gemini:\/\/jobs\/([^/]+)$/;
 
+/**
+ * Resolve an MCP resource URI to a `ReadResourceResult`.
+ *
+ * Supported URIs:
+ *  - `gemini://server/health`       — runtime diagnostics
+ *  - `gemini://sessions`            — active session list
+ *  - `gemini://sessions/{sessionId}` — single session detail (template)
+ *  - `gemini://jobs`                — pending job list
+ *  - `gemini://jobs/{jobId}`        — single job detail (template)
+ *  - `gemini://models`              — curated model list (see
+ *    {@link getModelsPayload} in `src/models-data.ts`; honors
+ *    `GEMINI_MODELS` env override)
+ *
+ * Throws `McpError(InvalidParams)` for any URI that does not match the list
+ * above or one of the two templates.
+ */
 export function readResource(uri: string): ReadResourceResult {
   if (uri === "gemini://server/health") return readHealth(uri);
   if (uri === "gemini://sessions") return readSessionsList(uri);

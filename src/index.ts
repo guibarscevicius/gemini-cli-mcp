@@ -59,6 +59,12 @@ type PendingJobShutdown = (
 
 const DEFAULT_SHUTDOWN_FORCE_KILL_MS = 2000;
 
+/**
+ * Wire `ListToolsRequest` (returns the 8 tool definitions) and
+ * `CallToolRequest` (delegates to {@link handleCallTool}) on the provided
+ * server. Also builds the per-call `ToolCallContext` (progress token,
+ * elicitation, requestId) used by handlers.
+ */
 export function registerToolHandlers(server: ToolServer): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
@@ -90,6 +96,23 @@ export function registerToolHandlers(server: ToolServer): void {
   });
 }
 
+/**
+ * Build the MCP `Server` instance with capabilities and request handlers
+ * wired in.
+ *
+ * Lifecycle order:
+ *  1. Declare server capabilities (tools, logging, resources, prompts, elicitation).
+ *  2. Install MCP logger (`initMcpLogger`).
+ *  3. Register Resource handlers (list, list-templates, read).
+ *  4. Register Prompts handlers (list, get).
+ *  5. Wire resource-list-changed notifications to jobStore + sessionStore.
+ *  6. Register `SetLevel` handler.
+ *  7. Register tool handlers via {@link registerToolHandlers}.
+ *  8. Register `CancelledNotification` handler (maps requestId → jobId).
+ *
+ * Shutdown handlers are not installed here — see {@link registerShutdownHandlers}
+ * and {@link startServer}.
+ */
 export function createServer(): Server {
   const capabilities = {
     tools: {},
@@ -174,6 +197,13 @@ export function createServer(): Server {
 
 const server = createServer();
 
+/**
+ * Install SIGTERM / SIGINT / stdin-end / stdin-close / `server.onclose`
+ * listeners that fire `shutdown(reason)` exactly once. Returns an unsubscribe
+ * function that removes the stdin listeners and restores the previous
+ * `server.onclose`. Used by tests to clean up between runs; in production
+ * the returned function is ignored.
+ */
 export function registerShutdownHandlers({
   process: processRef = process,
   server: serverRef,
@@ -219,6 +249,13 @@ async function main() {
   await startServer();
 }
 
+/**
+ * Top-level server entrypoint: connect the transport (stdio by default),
+ * install shutdown hooks that drain in-flight jobs + the warm pool, and
+ * write a ready line to stderr. Resolves once `serverRef.connect(transport)`
+ * succeeds; the process then runs until a shutdown signal triggers
+ * `processRef.exit`.
+ */
 export async function startServer({
   server: serverRef = server,
   transport = new StdioServerTransport(),

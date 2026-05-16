@@ -129,10 +129,10 @@ function escapeGlobSegments(rawPath: string): string {
  * REFERENCE block. Single @file tokens are left untouched so the CLI handles
  * them natively (workspace boundary enforcement, etc.).
  *
- * @tokens in the prompt are masked (@ stripped) after expansion to prevent the
- * Gemini CLI from re-expanding them; file contents are appended in a
- * `[REFERENCE_CONTENT_START] ... [REFERENCE_CONTENT_END]` block and are NOT
- * inlined at the token position.
+ * Tokens in the prompt are masked (the leading `@` is stripped) after
+ * expansion to prevent the Gemini CLI from re-expanding them; file contents
+ * are appended in a `[REFERENCE_CONTENT_START] ... [REFERENCE_CONTENT_END]`
+ * block and are NOT inlined at the token position.
  *
  * Throws if any referenced file is not found, is a directory, or resolves
  * (following symlinks) to a path outside `cwd`.

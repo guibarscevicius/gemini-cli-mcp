@@ -46,7 +46,7 @@ The wizard will:
 
 | Property | Implementation |
 |----------|----------------|
-| No shell injection | `execFile()` passes args as an array directly to `execve` — no shell is invoked |
+| No shell injection | `spawn()` (via `spawnInGroup`) passes args as an array directly to `execve` — no shell is invoked |
 | No arg concatenation | Args array is built programmatically; user input is always a single element |
 | Env isolation | Subprocess inherits only `HOME` and `PATH` |
 | Structured output | `--output-format stream-json` produces reliable streaming NDJSON |
@@ -263,19 +263,19 @@ Input:
   model        string   Optional. Model to use for all prompts.
   cwd          string   Optional. Working directory for @file references.
   expandRefs   boolean  Optional. Set to false to disable @file expansion. Default: true.
-  wait         boolean  Optional. Block until all jobs complete (default: false).
+  wait         boolean  Optional. Block until all jobs complete (default: true).
 
-Output (wait: false — default):
-  jobs           array    Array of { jobId, index } objects — one per prompt.
-  pollIntervalMs number   Suggested polling interval in ms (2000).
-
-Output (wait: true):
+Output (wait: true — default):
   results   array    Array of result objects, one per prompt (in order):
     index     number    Position in the input prompts array.
     status    string    "done" or "error".
     response  string    Gemini's response (present when status is "done").
     error     string    Error message (present when status is "error").
-  summary   object   { total, done, errors } counts.
+  summary   object   { total, succeeded, failed, durationMs } counts and elapsed time.
+
+Output (wait: false):
+  jobs           array    Array of { jobId, index } objects — one per prompt.
+  pollIntervalMs number   Suggested polling interval in ms (2000).
 ```
 
 ### `gemini-research` — deep research with grounding
@@ -289,14 +289,10 @@ Input:
   model         string   Optional. Defaults to CLI default.
   cwd           string   Optional. Working directory for @file references.
   expandRefs    boolean  Optional. Set to false to disable @file expansion. Default: true.
-  wait          boolean  Optional. Block until done (default: false).
-  waitTimeoutMs number   Optional. Max ms to wait when wait=true (default: 90000).
+  wait          boolean  Optional. Block until done (default: true).
+  waitTimeoutMs number   Optional. Max ms to wait when wait=true (default: 90000 for quick/standard, 180000 for deep).
 
-Output (async — default):
-  jobId          string   Poll with gemini-poll or cancel with gemini-cancel.
-  pollIntervalMs number   Suggested polling interval in ms (2000).
-
-Output (wait: true — done):
+Output (wait: true — done, default):
   jobId          string
   response       string   Gemini's complete research response.
   pollIntervalMs number
@@ -306,6 +302,10 @@ Output (wait: true — timeout):
   partialResponse string   Partial output collected before timeout (may be empty).
   timedOut        true
   pollIntervalMs  number
+
+Output (wait: false — async):
+  jobId          string   Poll with gemini-poll or cancel with gemini-cancel.
+  pollIntervalMs number   Suggested polling interval in ms (2000).
 ```
 
 ## Resources
@@ -461,6 +461,8 @@ All variables are optional.
 | `GEMINI_JOB_GC_MS` | `60000` | Job garbage-collection interval (ms). |
 | `GEMINI_SKIP_DETECTION` | `0` | `1` = skip CLI version/flag detection at startup (use hardcoded defaults). |
 | `GEMINI_MODELS` | (built-in list) | Comma-separated model IDs to override the default curated list exposed by the `gemini://models` resource. Custom entries are reported with `source: "custom"`, `tier: "balanced"`, and `description: "Custom model"`. |
+| `GEMINI_DISABLE_PDEATHSIG` | `0` | `1` = skip the `setpriv --pdeathsig TERM` wrapper around child spawns (Linux only). Escape hatch for the issue #97 PDEATHSIG safety net; only the literal string `"1"` disables. |
+| `GEMINI_ORPHAN_REAPER` | `1` | `0` = disable the issue #99 startup sweep that reaps orphaned `gemini --yolo --output-format stream-json` workers belonging to the current user. POSIX-only; no-op on Windows. |
 
 ## CLI compatibility
 

@@ -42,6 +42,10 @@ export type ToolResponse = {
 /**
  * Dispatch a CallTool request to the appropriate handler.
  *
+ * Supported tool names (post-PR #114 consolidation):
+ *   `ask-gemini`, `gemini-reply`, `gemini-poll`, `gemini-cancel`,
+ *   `gemini-health`, `gemini-sessions`, `gemini-batch`, `gemini-research`.
+ *
  * Error contract:
  *   - Unknown tool name        → throws McpError(MethodNotFound)
  *   - Invalid input (Zod)      → throws McpError(InvalidParams) with field-level detail

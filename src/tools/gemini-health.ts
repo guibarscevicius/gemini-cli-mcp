@@ -38,6 +38,17 @@ export interface GeminiHealthOutput {
   };
 }
 
+/**
+ * Return a snapshot of server health: build version, server-uptime metrics,
+ * pending-job counts, warm-pool state, session-store stats, and a `cli`
+ * sub-object describing the detected Gemini CLI version + active flag
+ * adaptations.
+ *
+ * Detection results (`getCapabilities`) are cached for the server's lifetime;
+ * the first health call may incur a one-time `~gemini --version`/`--help`
+ * probe, subsequent calls are O(1). See {@link getCapabilities} in
+ * `src/cli-capabilities.ts`.
+ */
 export async function geminiHealth(input: unknown): Promise<GeminiHealthOutput> {
   GeminiHealthSchema.parse(input);
 
