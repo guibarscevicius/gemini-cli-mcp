@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.9.0...gemini-cli-mcp-v0.10.0) (2026-05-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* The `parseGeminiOutput` function and `GeminiJsonOutput` interface exported from `src/gemini-runner.ts` are removed. They have been unused in production since output parsing migrated to inline NDJSON in `spawnGemini` / `runWithWarmProcess`. There are no in-tree callers. If you imported either, drop the import; if you parsed Gemini stream-json output yourself, mirror the NDJSON loop in `spawnGemini`.
+
+### Bug Fixes
+
+* surface swallowed errors from session, notification, NDJSON, and persistence paths ([#124](https://github.com/guibarscevicius/gemini-cli-mcp/issues/124)) ([a890a0f](https://github.com/guibarscevicius/gemini-cli-mcp/commit/a890a0f80c9c3c9db8aadba479426008be5da448))
+
+
+### Documentation
+
+* post-0.9.0 conformity sweep ([#115](https://github.com/guibarscevicius/gemini-cli-mcp/issues/115) + [#116](https://github.com/guibarscevicius/gemini-cli-mcp/issues/116) + [#117](https://github.com/guibarscevicius/gemini-cli-mcp/issues/117)) + adopt AGENTS.md ([#118](https://github.com/guibarscevicius/gemini-cli-mcp/issues/118)) ([2d0e9f0](https://github.com/guibarscevicius/gemini-cli-mcp/commit/2d0e9f00945674f869d7812a477cd4588cb08ff2))
+
 ## [0.9.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.8.0...gemini-cli-mcp-v0.9.0) (2026-05-10)
 
 
