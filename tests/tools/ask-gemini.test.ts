@@ -339,19 +339,20 @@ describe("askGemini", () => {
     });
   });
 
-  // ── #122: surface historyPersisted on appendTurn failure ────────────────────
-
   it("appendTurn failure passes { persisted: false, error } to completeJob (issue #122)", async () => {
     mockStore.appendTurn.mockImplementation(() => {
       throw new Error("SQLite: appendTurn ROLLBACK");
     });
-    const { jobId } = await askGemini({ prompt: "hello" });
+    const { jobId, sessionId } = await askGemini({ prompt: "hello" });
     await flush();
     expect(mockJobStore.completeJob).toHaveBeenCalledWith(
       jobId,
       "Gemini says hello.",
       { persisted: false, error: "SQLite: appendTurn ROLLBACK" }
     );
+    // clearPendingJob must still run even when persistence threw, otherwise
+    // the session stays pinned to a job that has already resolved.
+    expect(mockStore.clearPendingJob).toHaveBeenCalledWith(sessionId);
   });
 
   it("wait: true surfaces historyPersisted: false when persistence threw (issue #122)", async () => {
@@ -511,8 +512,6 @@ describe("askGemini", () => {
     expect(result).not.toHaveProperty("response");
     expect(result).not.toHaveProperty("partialResponse");
   });
-
-  // ── #63: wait:true timeout must NOT cancel the job ────────────────────────
 
   it("wait:true timeout does NOT call cancelJob", async () => {
     mockJobStore.getJob.mockReturnValue({

@@ -89,20 +89,19 @@ export async function askGemini(input: unknown, ctx: ToolCallContext = {}): Prom
       // Persist before completing so an appendTurn failure is captured on the
       // job and surfaced through historyPersisted to wait/poll callers, instead
       // of arriving after completeJob has already unblocked them.
-      let historyPersisted = true;
-      let historyError: string | undefined;
+      let history: jobStore.CompletionHistory = { persisted: true };
       try {
         sessionStore.appendTurn(sessionId, "user", prompt);
         sessionStore.appendTurn(sessionId, "assistant", response);
       } catch (err) {
-        historyPersisted = false;
-        historyError = err instanceof Error ? err.message : String(err);
+        const error = err instanceof Error ? err.message : String(err);
+        history = { persisted: false, error };
         process.stderr.write(
-          `[gemini-cli-mcp] session ${sessionId} history update failed: ${historyError}\n`
+          `[gemini-cli-mcp] session ${sessionId} history update failed: ${error}\n`
         );
       }
       sessionStore.clearPendingJob(sessionId);
-      jobStore.completeJob(jobId, response, { persisted: historyPersisted, error: historyError });
+      jobStore.completeJob(jobId, response, history);
       if (ctx.requestId !== undefined) {
         unregisterRequest(ctx.requestId);
       }
@@ -205,7 +204,7 @@ export const askGeminiToolDefinition: Tool = {
       response: { type: "string" },
       partialResponse: { type: "string" },
       timedOut: { type: "boolean" },
-      historyPersisted: { type: "boolean" },
+      historyPersisted: { type: "boolean", const: false },
       historyError: { type: "string" },
     },
     required: ["jobId", "sessionId", "pollIntervalMs"],

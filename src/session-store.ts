@@ -148,9 +148,7 @@ export class SessionStore {
     try {
       const row = this.stmtGetTurns.get(id) as { turns: string } | undefined;
       if (!row) {
-        process.stderr.write(`[gemini-cli-mcp] appendTurn: session ${id} not found — turn dropped\n`);
-        this.db.exec("ROLLBACK");
-        return;
+        throw new Error(`appendTurn: session ${id} not found`);
       }
       const turns: Turn[] = JSON.parse(row.turns);
       turns.push({ role, content });

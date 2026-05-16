@@ -109,6 +109,30 @@ describe("completeJob", () => {
     completeJob("j3-resolve", "resolved response");
     await expect(completion).resolves.toBe("resolved response");
   });
+
+  it("sets historyPersisted: false and historyError when history.persisted is false", () => {
+    createJob("j3-history-fail");
+    completeJob("j3-history-fail", "response", { persisted: false, error: "ROLLBACK" });
+    const job = getJob("j3-history-fail")!;
+    expect(job.historyPersisted).toBe(false);
+    expect(job.historyError).toBe("ROLLBACK");
+  });
+
+  it("does not set historyPersisted when history.persisted is true", () => {
+    createJob("j3-history-ok");
+    completeJob("j3-history-ok", "response", { persisted: true });
+    const job = getJob("j3-history-ok")!;
+    expect(job.historyPersisted).toBeUndefined();
+    expect(job.historyError).toBeUndefined();
+  });
+
+  it("does not set historyPersisted when history argument is omitted", () => {
+    createJob("j3-history-absent");
+    completeJob("j3-history-absent", "response");
+    const job = getJob("j3-history-absent")!;
+    expect(job.historyPersisted).toBeUndefined();
+    expect(job.historyError).toBeUndefined();
+  });
 });
 
 describe("failJob", () => {

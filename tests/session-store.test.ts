@@ -60,10 +60,11 @@ describe("SessionStore", () => {
     expect(totalTurns).toBe(4);
   });
 
-  it("appendTurn on non-existent session drops the turn and leaves store consistent", () => {
+  it("appendTurn on non-existent session throws and leaves store consistent", () => {
     const id = "rollback-test";
     store.create(id);
-    store.appendTurn("ghost-session", "user", "should be dropped");
+    expect(() => store.appendTurn("ghost-session", "user", "should be dropped"))
+      .toThrowError(/session ghost-session not found/);
     store.appendTurn(id, "user", "should work");
     store.appendTurn(id, "assistant", "response");
     const { history } = store.formatHistory(id);

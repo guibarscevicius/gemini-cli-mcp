@@ -65,7 +65,7 @@ export const geminiPollToolDefinition: Tool = {
       partialResponse: { type: "string" },
       response: { type: "string" },
       error: { type: "string" },
-      historyPersisted: { type: "boolean" },
+      historyPersisted: { type: "boolean", const: false },
       historyError: { type: "string" },
     },
     required: ["status"],

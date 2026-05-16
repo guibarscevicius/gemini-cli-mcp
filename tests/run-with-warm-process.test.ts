@@ -120,8 +120,8 @@ describe("runWithWarmProcess", () => {
 
     await expect(promise).resolves.toBe("ok");
 
-    // Issue #121: dropped non-JSON lines must surface to stderr regardless of
-    // GEMINI_STRUCTURED_LOGS — the test env does not set it.
+    // This stderr log fires unconditionally — not gated on GEMINI_STRUCTURED_LOGS —
+    // so non-JSON CLI lines surface in the default server config (env unset here).
     const output = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
     expect(output).toContain("non-JSON stdout line dropped: not json");
     stderrSpy.mockRestore();
