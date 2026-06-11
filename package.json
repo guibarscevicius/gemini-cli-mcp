@@ -1,7 +1,7 @@
 {
   "name": "@guibarscevicius/gemini-cli-mcp",
   "version": "0.10.0",
-  "description": "Safe MCP server wrapping the official Gemini CLI — stateful sessions, no shell injection, subscription auth",
+  "description": "[DEPRECATED] No longer maintained — Gemini CLI stops serving its free/Pro/Ultra tiers on 2026-06-18 (Google is moving to Antigravity CLI). Safe MCP server wrapping the official Gemini CLI.",
   "type": "module",
   "bin": {
     "gemini-cli-mcp": "./dist/index.js"
