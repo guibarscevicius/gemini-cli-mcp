@@ -1,8 +1,27 @@
 # gemini-cli-mcp
 
+> ## ⚠️ Deprecated — no longer maintained
+>
+> Google is [transitioning Gemini CLI to Antigravity CLI](https://goo.gle/gemini-cli-migration).
+> On **June 18, 2026**, Gemini CLI stops serving requests for the **free, Google AI
+> Pro, and Ultra** tiers — the exact tiers this project was built to wrap. (Access
+> continues for paid Gemini API keys and Gemini Code Assist Standard/Enterprise.)
+>
+> **What this means:**
+> - **Free / Pro / Ultra users:** this tool stops working after 2026-06-18. Google's
+>   successor is [Antigravity CLI](https://antigravity.google/product/antigravity-cli).
+>   Note this wrapper targets the `gemini` binary and does **not** drive Antigravity's `agy`.
+> - **Paid API key / Code Assist Standard or Enterprise users:** the underlying `gemini`
+>   CLI keeps working, so this wrapper may keep functioning — but it receives no further updates.
+> - The code stays available under MIT; the npm package is deprecated (existing installs
+>   keep working). No new features, fixes, or security updates are planned.
+>
+> _Original documentation is preserved below._
+
 [![npm](https://img.shields.io/npm/v/@guibarscevicius/gemini-cli-mcp)](https://www.npmjs.com/package/@guibarscevicius/gemini-cli-mcp)
 [![CI](https://github.com/guibarscevicius/gemini-cli-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/guibarscevicius/gemini-cli-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![No Maintenance Intended](https://unmaintained.tech/badge.svg)](https://unmaintained.tech/)
 
 Use Gemini's free tier as an on-demand code reviewer from inside Claude Code, Codex, or any MCP-compatible host. `gemini-cli-mcp` wraps the official [`@google/gemini-cli`](https://github.com/google-gemini/gemini-cli) and exposes it through the Model Context Protocol — so you can ask Gemini to second-opinion a diff, pair-review a refactor, or scan a long file without leaving your primary agent.
 
@@ -483,11 +502,9 @@ cli.detectionError     string | null   Error message if detection failed.
 
 Set `GEMINI_SKIP_DETECTION=1` to bypass detection entirely and use hardcoded defaults.
 
-### Upstream tracking
+### Upgrading the upstream CLI (for forks)
 
-A GitHub Actions workflow (`.github/workflows/upstream-watch.yml`) runs weekly to check for new `@google/gemini-cli` releases. When a new version is detected, it opens a tracking issue with a review checklist.
-
-When refreshing to a new upstream CLI version, use this acceptance flow:
+This project is no longer maintained and no longer tracks upstream `@google/gemini-cli` releases. If you fork it to keep it working against a newer CLI version, use this acceptance flow after bumping the version:
 
 ```bash
 npm run build

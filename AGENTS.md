@@ -1,5 +1,10 @@
 # gemini-cli-mcp — Claude Instructions
 
+> **⚠️ Deprecated — no longer maintained.** Google's Gemini CLI stops serving its
+> free/Pro/Ultra tiers on 2026-06-18 (transition to Antigravity CLI), which removes
+> this project's reason to exist. No new features, fixes, or releases are planned. The
+> guidance below is retained for anyone forking or running the final version.
+
 ## Key source files
 - `src/gemini-runner.ts` — subprocess execution, retry, telemetry; re-exports the four extracted modules below at their original paths so consumers don't need to update imports
 - `src/concurrency.ts` — `Semaphore`, `MAX_CONCURRENT`, `QUEUE_TIMEOUT_MS` (extracted from runner, #109)

@@ -1,10 +1,14 @@
 # Security Policy
 
+> **⚠️ This project is deprecated and no longer actively maintained.** Security
+> reports will not be actively triaged or fixed. The reporting channel below remains
+> open so issues can be disclosed responsibly and recorded for anyone who forks the
+> project, but do not expect a coordinated fix. See the README for context.
+
 ## Supported versions
 
-This project follows a rolling release model: security fixes land on the latest
-published version. Please upgrade to the most recent release before reporting an
-issue you cannot reproduce there.
+No versions receive ongoing security maintenance. The last published release is the
+final one; there is no rolling fix stream.
 
 ## Reporting a vulnerability
 
