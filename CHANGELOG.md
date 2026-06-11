@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.10.0...gemini-cli-mcp-v0.11.0) (2026-06-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* gemini-cli-mcp is no longer maintained. Google is transitioning Gemini CLI to Antigravity CLI; the free/Pro/Ultra tiers it wraps stop being served on 2026-06-18.
+
+### Features
+
+* deprecate gemini-cli-mcp ahead of Gemini CLI free-tier shutdown ([e95efbc](https://github.com/guibarscevicius/gemini-cli-mcp/commit/e95efbc287bea4b7966860e239e337bdda88774c))
+
 ## [0.10.0](https://github.com/guibarscevicius/gemini-cli-mcp/compare/gemini-cli-mcp-v0.9.0...gemini-cli-mcp-v0.10.0) (2026-05-16)
 
 
