@@ -329,7 +329,7 @@ describe("runGemini", () => {
   it("appends cwd hint when stderr contains 'Path not in workspace'", async () => {
     const exec = makeErrorExecutor({
       stderr:
-        'Error executing tool read_file: Path not in workspace: Attempted path "/other/project/foo.ts" resolves outside the allowed workspace directories: /home/gui/projects/myapp',
+        'Error executing tool read_file: Path not in workspace: Attempted path "/other/project/foo.ts" resolves outside the allowed workspace directories: /home/user/projects/myapp',
     });
     await expect(runGemini("review @foo.ts", {}, exec)).rejects.toThrow(
       "pass cwd pointing to the project root containing your @file targets"
